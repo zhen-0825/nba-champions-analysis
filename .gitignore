@@ -1,0 +1,7 @@
+# 金鑰：絕對不能上傳
+.env
+
+# 本機暫存與輸出
+data/
+reports/
+__pycache__/

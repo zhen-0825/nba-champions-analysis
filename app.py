@@ -1,0 +1,489 @@
+"""
+NBA 冠軍球隊數據分析網頁（Streamlit）
+資料來源：Supabase 資料庫（由 load_to_supabase.py 寫入）
+
+執行方式（在 VS Code 終端機輸入）：
+  streamlit run app.py
+
+需要 .env 裡有 SUPABASE_URL 和 SUPABASE_PUBLISHABLE_KEY（只能讀、不能改的公開金鑰）
+"""
+
+import io
+import os
+
+import pandas as pd
+import plotly.graph_objects as go
+import streamlit as st
+
+# =====================================================================
+# 設定區
+# =====================================================================
+TEAM_ZH = {"GSW": "勇士", "DEN": "金塊", "BOS": "塞爾提克", "OKC": "雷霆", "NYK": "尼克"}
+# 每支球隊固定一個顏色（色盲友善配色），不管怎麼篩選顏色都不會變
+TEAM_COLORS = {"GSW": "#2a78d6", "DEN": "#eb6834", "BOS": "#1baf7a",
+               "OKC": "#eda100", "NYK": "#e87ba4"}
+TYPE_OPTIONS = {"例行賽": "Regular Season", "附加賽": "PlayIn", "季後賽": "Playoffs"}
+
+# 可以比較的指標：顯示名稱 →（欄位, 格式）
+METRICS = {
+    "真實命中率 TS%": ("ts", ".1%"),
+    "三分出手比例": ("tpar", ".1%"),
+    "三分命中率": ("fg3_pct", ".1%"),
+    "場均三分出手": ("fg3a_pg", ".1f"),
+    "場均得分": ("ppg", ".1f"),
+    "場均助攻": ("apg", ".1f"),
+    "助攻失誤比": ("ast_tov", ".2f"),
+    "勝率": ("win_pct", ".1%"),
+}
+
+MUTED = "#8a8984"
+GRID = "rgba(128,128,128,0.16)"
+FONT = "Noto Sans TC, Microsoft JhengHei, sans-serif"
+BLUE_RAMP = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#104281"]
+
+
+# =====================================================================
+# 網頁外觀
+# =====================================================================
+st.set_page_config(page_title="NBA 冠軍球隊數據分析", page_icon="🏆", layout="wide")
+
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap');
+html, body, [class*="css"], .stMarkdown, .stText { font-family: 'Noto Sans TC', 'Microsoft JhengHei', sans-serif; }
+.block-container { padding-top: 2rem; padding-bottom: 3rem; max-width: 1400px; }
+.hero { background: linear-gradient(120deg, #17306b 0%, #2a78d6 100%);
+        border-left: 6px solid #ffc72c; border-radius: 14px;
+        padding: 22px 28px; margin-bottom: 18px; color: #ffffff; }
+.hero-kicker { font-size: 0.8rem; letter-spacing: 0.12em; opacity: 0.85; font-weight: 500; }
+.hero h1 { color: #ffffff; font-size: 2rem; font-weight: 900; margin: 4px 0 10px 0; padding: 0; }
+.chip { display: inline-block; background: rgba(255,255,255,0.16); border: 1px solid rgba(255,255,255,0.28);
+        border-radius: 999px; padding: 3px 12px; margin: 4px 6px 0 0; font-size: 0.85rem; }
+.kpi { border: 1px solid rgba(128,128,128,0.22); border-radius: 12px;
+       padding: 14px 18px; background: rgba(128,128,128,0.05); height: 100%; }
+.kpi-label { font-size: 0.82rem; opacity: 0.7; font-weight: 500; }
+.kpi-value { font-size: 1.75rem; font-weight: 700; line-height: 1.3; margin-top: 2px; }
+.kpi-sub { font-size: 0.8rem; opacity: 0.6; margin-top: 2px; }
+.section-title { font-size: 1.15rem; font-weight: 700; margin: 6px 0 0 0; }
+.section-sub { font-size: 0.85rem; opacity: 0.65; margin: 0 0 6px 0; }
+.stTabs [data-baseweb="tab-list"] { gap: 6px; }
+.stTabs [data-baseweb="tab"] { font-size: 1rem; font-weight: 500; padding: 8px 16px; }
+</style>
+""", unsafe_allow_html=True)
+
+
+def kpi(col, label, value, sub=""):
+    col.markdown(f'<div class="kpi"><div class="kpi-label">{label}</div>'
+                 f'<div class="kpi-value">{value}</div><div class="kpi-sub">{sub}</div></div>',
+                 unsafe_allow_html=True)
+
+
+def section(title, sub=""):
+    st.markdown(f'<div class="section-title">{title}</div>'
+                f'<div class="section-sub">{sub}</div>', unsafe_allow_html=True)
+
+
+def style(fig, height):
+    fig.update_layout(
+        height=height, margin=dict(l=8, r=24, t=8, b=8),
+        font=dict(family=FONT, size=13),
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+        hoverlabel=dict(font=dict(family=FONT, size=13)),
+        legend=dict(orientation="h", y=-0.15, x=0), bargap=0.35,
+    )
+    fig.update_xaxes(gridcolor=GRID, zeroline=False, showline=False)
+    fig.update_yaxes(gridcolor=GRID, zeroline=False, showline=False)
+    return fig
+
+
+def fmt(v, f):
+    return "-" if pd.isna(v) else format(v, f)
+
+
+def team_label(abbr):
+    return f"{abbr} {TEAM_ZH.get(abbr, '')}".strip()
+
+
+# =====================================================================
+# 從 Supabase 讀資料
+# =====================================================================
+@st.cache_resource
+def get_client():
+    from dotenv import load_dotenv
+    from supabase import create_client
+
+    load_dotenv()
+    url = os.getenv("SUPABASE_URL")
+    key = os.getenv("SUPABASE_PUBLISHABLE_KEY")
+    if not url or not key:
+        st.error("找不到 SUPABASE_URL 或 SUPABASE_PUBLISHABLE_KEY，請檢查 .env 檔")
+        st.stop()
+    return create_client(url, key)
+
+
+def fetch_all(table, order_cols, page=1000):
+    """資料庫一次最多回傳 1000 筆，所以一頁一頁讀到完"""
+    client = get_client()
+    rows, start = [], 0
+    while True:
+        q = client.table(table).select("*")
+        for c in order_cols:
+            q = q.order(c)
+        part = q.range(start, start + page - 1).execute().data
+        rows += part
+        if len(part) < page:
+            break
+        start += page
+    return pd.DataFrame(rows)
+
+
+@st.cache_data(ttl=3600, show_spinner="從資料庫讀取資料中…")
+def load_data():
+    team = fetch_all("team_season_stats", ["team_id", "season", "season_type"])
+    players = fetch_all("player_season_stats", ["team_id", "season", "season_type", "player_id"])
+    champs = fetch_all("champions", ["season"])
+    teams = fetch_all("teams", ["team_id"])
+    champs = champs.merge(teams[["team_id", "abbreviation"]], on="team_id")
+    return team, players, champs
+
+
+@st.cache_data(ttl=3600, show_spinner="讀取逐場數據中…")
+def load_player_games(player_id, team_id, season):
+    """讀取某位球員在某隊、某球季的逐場數據"""
+    client = get_client()
+    stats = (client.table("player_game_stats")
+             .select("game_id,min,pts,fgm,fga,fg3m,fg3a,ftm,fta,reb,ast,"
+                     "games!inner(game_date,season,season_type)")
+             .eq("player_id", player_id).eq("team_id", team_id)
+             .eq("games.season", season).execute().data)
+    if not stats:
+        return pd.DataFrame()
+    df = pd.json_normalize(stats).rename(columns=lambda c: c.replace("games.", ""))
+    tg = (client.table("team_games").select("game_id,matchup,wl")
+          .eq("team_id", team_id).in_("game_id", df["game_id"].tolist()).execute().data)
+    df = df.merge(pd.DataFrame(tg), on="game_id", how="left")
+    df["game_date"] = pd.to_datetime(df["game_date"])
+    return df.sort_values("game_date")
+
+
+def add_metrics(d, games_col="games"):
+    """由加總數字算出各項指標"""
+    d = d.copy()
+    n = d[games_col].replace(0, pd.NA)
+    d["ts"] = d["pts"] / (2 * (d["fga"] + 0.44 * d["fta"]))
+    d["fg_pct"] = d["fgm"] / d["fga"]
+    d["tpar"] = d["fg3a"] / d["fga"]
+    d["fg3_pct"] = d["fg3m"] / d["fg3a"].replace(0, pd.NA)
+    d["ppg"] = d["pts"] / n
+    d["fg3a_pg"] = d["fg3a"] / n
+    d["apg"] = d["ast"] / n
+    d["ast_tov"] = d["ast"] / d["tov"].replace(0, pd.NA)
+    if "wins" in d.columns:
+        d["win_pct"] = d["wins"] / n
+    num = ["ts", "fg_pct", "tpar", "fg3_pct", "ppg", "fg3a_pg", "apg", "ast_tov", "win_pct"]
+    for c in [c for c in num if c in d.columns]:
+        d[c] = pd.to_numeric(d[c], errors="coerce")
+    return d
+
+
+team_raw, player_raw, champs = load_data()
+if team_raw.empty:
+    st.error("資料庫裡還沒有資料，請先執行 load_to_supabase.py")
+    st.stop()
+
+ALL_TEAMS = [t for t in TEAM_ZH if t in set(team_raw["abbreviation"])]
+ALL_SEASONS = sorted(team_raw["season"].unique())
+CHAMP_SET = set(zip(champs["season"], champs["abbreviation"]))   # {(球季, 球隊)}
+
+
+# =====================================================================
+# 左側：查詢條件
+# =====================================================================
+with st.sidebar:
+    st.markdown("### 🔎 查詢條件")
+    teams_sel = st.multiselect("球隊", ALL_TEAMS, default=ALL_TEAMS, format_func=team_label)
+    s_from, s_to = st.select_slider("球季範圍", ALL_SEASONS,
+                                    value=(ALL_SEASONS[0], ALL_SEASONS[-1]))
+    types_sel = st.multiselect("比賽類型", list(TYPE_OPTIONS), default=["例行賽"],
+                               help="跨球季比較建議只看例行賽：每隊每季都是 82 場左右，比較公平。"
+                                    "季後賽場數差很多，數字容易被少數比賽影響。")
+    metric_name = st.selectbox("比較指標", list(METRICS))
+    st.divider()
+    st.caption("資料來源：NBA 官方數據（nba_api）→ Supabase 資料庫\n\n★ 代表該隊奪冠的球季")
+
+if not teams_sel or not types_sel:
+    st.warning("請至少選擇一支球隊和一種比賽類型")
+    st.stop()
+
+metric, mfmt = METRICS[metric_name]
+seasons = [s for s in ALL_SEASONS if s_from <= s <= s_to]
+types = [TYPE_OPTIONS[t] for t in types_sel]
+
+# 依條件篩選，再把不同比賽類型加總成「球隊 × 球季」
+t = team_raw[team_raw["abbreviation"].isin(teams_sel) & team_raw["season"].isin(seasons)
+             & team_raw["season_type"].isin(types)]
+num_cols = ["games", "wins", "pts", "fgm", "fga", "fg3m", "fg3a", "ftm", "fta",
+            "oreb", "dreb", "reb", "ast", "stl", "blk", "tov"]
+team_season = add_metrics(t.groupby(["abbreviation", "season"], as_index=False)[num_cols].sum())
+team_season["champion"] = [(s, a) in CHAMP_SET for s, a in
+                           zip(team_season["season"], team_season["abbreviation"])]
+
+if team_season.empty:
+    st.warning("這個條件沒有資料，請換一個條件。")
+    st.stop()
+
+
+# =====================================================================
+# 頁首
+# =====================================================================
+chips = "".join(f'<span class="chip">{team_label(a)}</span>' for a in teams_sel)
+st.markdown(f"""
+<div class="hero">
+  <div class="hero-kicker">NBA DATA ANALYSIS · 2022–2026 CHAMPIONS</div>
+  <h1>🏆 NBA 冠軍球隊數據分析</h1>
+  <span class="chip">📅 {s_from} – {s_to}</span>
+  <span class="chip">{'・'.join(types_sel)}</span>{chips}
+</div>
+""", unsafe_allow_html=True)
+
+k1, k2, k3, k4 = st.columns(4)
+kpi(k1, "球隊", f"{len(teams_sel)} 隊", "2022～2026 五屆冠軍")
+kpi(k2, "球季", f"{len(seasons)} 季", f"{s_from} ～ {s_to}")
+kpi(k3, "比賽場數", f"{int(team_season['games'].sum()):,}", "所選球隊、球季、比賽類型合計")
+n_titles = int(team_season["champion"].sum())
+kpi(k4, "範圍內奪冠球季", f"{n_titles} 次", "圖上以 ★ 標示")
+st.write("")
+
+tab1, tab2, tab3, tab4, tab5 = st.tabs(
+    ["📈 球季趨勢", "🗺️ 球隊 × 球季", "🏆 冠軍球季比較", "👤 球員", "📋 數據表"])
+
+
+# ---------- 1. 球季趨勢 ----------
+with tab1:
+    section(f"{metric_name}：各隊逐季變化", "每條線一支球隊；★ 是該隊奪冠的球季")
+    fig = go.Figure()
+    for abbr in teams_sel:
+        d = team_season[team_season["abbreviation"] == abbr].sort_values("season")
+        if d.empty:
+            continue
+        color = TEAM_COLORS.get(abbr, MUTED)
+        fig.add_trace(go.Scatter(
+            x=d["season"], y=d[metric], mode="lines+markers", name=team_label(abbr),
+            line=dict(color=color, width=2), marker=dict(size=8, color=color,
+                                                         line=dict(width=2, color="rgba(255,255,255,0.95)")),
+            customdata=d[["games", "wins"]].values,
+            hovertemplate=f"<b>{team_label(abbr)}</b>　%{{y:{mfmt}}}"
+                          "（%{customdata[1]} 勝 / %{customdata[0]} 場）<extra></extra>",
+        ))
+        c = d[d["champion"]]
+        if not c.empty:
+            fig.add_trace(go.Scatter(
+                x=c["season"], y=c[metric], mode="markers", showlegend=False, hoverinfo="skip",
+                marker=dict(symbol="star", size=20, color=color,
+                            line=dict(width=2, color="rgba(255,255,255,0.95)")),
+            ))
+    fig.update_yaxes(title=metric_name, tickformat=".0%" if "%" in mfmt else None)
+    fig.update_xaxes(title="球季", categoryorder="array", categoryarray=seasons)
+    fig.update_layout(hovermode="x unified")
+    st.plotly_chart(style(fig, 460), use_container_width=True)
+
+
+# ---------- 2. 球隊 × 球季 熱力圖 ----------
+with tab2:
+    section(f"{metric_name}：球隊 × 球季交叉表", "顏色越深數值越高；★ 是奪冠球季；空白代表該季沒有這類比賽")
+    pivot = team_season.pivot(index="abbreviation", columns="season", values=metric)
+    pivot = pivot.reindex(index=[a for a in teams_sel if a in pivot.index], columns=seasons)
+    z = pivot.values.astype(float)
+    fig = go.Figure(go.Heatmap(
+        z=z, x=pivot.columns, y=[team_label(a) for a in pivot.index],
+        colorscale=[[i / (len(BLUE_RAMP) - 1), c] for i, c in enumerate(BLUE_RAMP)],
+        xgap=2, ygap=2, colorbar=dict(title="", thickness=12,
+                                      tickformat=".0%" if "%" in mfmt else None),
+        hovertemplate=f"%{{y}}　%{{x}}<br>{metric_name}：%{{z:{mfmt}}}<extra></extra>",
+    ))
+    zmin, zmax = pd.Series(z.ravel()).min(), pd.Series(z.ravel()).max()
+    for i, abbr in enumerate(pivot.index):
+        for j, season in enumerate(pivot.columns):
+            v = z[i, j]
+            if pd.isna(v):
+                continue
+            level = (v - zmin) / ((zmax - zmin) or 1)
+            star = "★<br>" if (season, abbr) in CHAMP_SET else ""
+            fig.add_annotation(x=season, y=team_label(abbr), showarrow=False,
+                               text=star + fmt(v, mfmt),
+                               font=dict(size=11, color="#ffffff" if level > 0.5 else "#0b0b0b"))
+    fig.update_yaxes(autorange="reversed", showgrid=False)
+    fig.update_xaxes(showgrid=False, side="top")
+    st.plotly_chart(style(fig, 90 + 70 * len(pivot.index)), use_container_width=True)
+
+
+# ---------- 3. 冠軍球季比較 ----------
+with tab3:
+    champ_rows = team_season[team_season["champion"]].copy()
+    if champ_rows.empty:
+        st.info("目前的球隊與球季範圍內沒有奪冠球季。")
+    else:
+        champ_rows["label"] = champ_rows["season"] + " " + champ_rows["abbreviation"].map(team_label)
+        champ_rows = champ_rows.sort_values("season")
+        left, right = st.columns([3, 2], gap="large")
+        with left:
+            section(f"奪冠那一季的{metric_name}", "比較每支冠軍隊在奪冠球季的表現")
+            d = champ_rows.sort_values(metric)
+            fig = go.Figure(go.Bar(
+                x=d[metric], y=d["label"], orientation="h",
+                marker=dict(color=[TEAM_COLORS.get(a, MUTED) for a in d["abbreviation"]]),
+                text=[fmt(v, mfmt) for v in d[metric]], textposition="outside", cliponaxis=False,
+                hovertemplate=f"<b>%{{y}}</b><br>{metric_name}：%{{x:{mfmt}}}<extra></extra>",
+            ))
+            try:
+                fig.update_traces(marker_cornerradius=4)
+            except ValueError:
+                pass
+            fig.update_xaxes(showticklabels=False, showgrid=False)
+            fig.update_yaxes(showgrid=False)
+            st.plotly_chart(style(fig, max(320, 56 * len(d) + 60)), use_container_width=True)
+        with right:
+            section("奪冠球季 vs 該隊其他球季", "奪冠那季比該隊範圍內其他球季平均高（＋）或低（－）多少")
+            rows = []
+            for _, r in champ_rows.iterrows():
+                others = team_season[(team_season["abbreviation"] == r["abbreviation"])
+                                     & (~team_season["champion"])][metric].mean()
+                diff = r[metric] - others
+                unit = "百分點" if "%" in mfmt else ""
+                diff_txt = "-" if pd.isna(diff) else (
+                    f"{diff * 100:+.1f} {unit}" if "%" in mfmt else f"{diff:+.2f}")
+                rows.append({"冠軍球季": r["label"], metric_name: fmt(r[metric], mfmt),
+                             "其他球季平均": fmt(others, mfmt), "差距": diff_txt})
+            st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+
+
+# ---------- 4. 球員 ----------
+with tab4:
+    c1, c2 = st.columns(2)
+    p_team = c1.selectbox("球隊", teams_sel, format_func=team_label, key="p_team")
+    p_seasons = sorted(team_season[team_season["abbreviation"] == p_team]["season"], reverse=True)
+    p_season = c2.selectbox("球季", p_seasons,
+                            format_func=lambda s: s + (" ★ 奪冠" if (s, p_team) in CHAMP_SET else ""))
+
+    p = player_raw[(player_raw["abbreviation"] == p_team) & (player_raw["season"] == p_season)
+                   & (player_raw["season_type"].isin(types))]
+    p_cols = ["gp", "min", "pts", "fgm", "fga", "fg3m", "fg3a", "ftm", "fta", "reb", "ast", "stl", "blk", "tov"]
+    players = add_metrics(p.groupby(["player_id", "player_name"], as_index=False)[p_cols].sum(), "gp")
+    team_games_n = int(team_season[(team_season["abbreviation"] == p_team)
+                                   & (team_season["season"] == p_season)]["games"].sum())
+    min_gp = max(1, round(team_games_n * 0.1))
+    players = players[(players["gp"] >= min_gp) & (players["fga"] > 0)].sort_values("pts", ascending=False)
+
+    if players.empty:
+        st.info("這個條件沒有球員資料。")
+    else:
+        color = TEAM_COLORS.get(p_team, MUTED)
+        left, right = st.columns([3, 2], gap="large")
+        with left:
+            section("出手量 vs 投籃效率", f"出賽至少 {min_gp} 場的球員；點越大總得分越多；虛線為中位數")
+            players["fga_pg"] = players["fga"] / players["gp"]
+            top = set(players.head(8)["player_name"])
+            fig = go.Figure(go.Scatter(
+                x=players["fga_pg"], y=players["ts"], mode="markers+text",
+                text=[n if n in top else "" for n in players["player_name"]],
+                textposition="top center", textfont=dict(size=12),
+                marker=dict(size=12 + 26 * (players["pts"] / players["pts"].max()) ** 0.5,
+                            color=color, opacity=0.88, line=dict(width=2, color="rgba(255,255,255,0.95)")),
+                customdata=players[["player_name", "gp", "ppg"]].values,
+                hovertemplate="<b>%{customdata[0]}</b><br>出賽 %{customdata[1]} 場｜場均 %{customdata[2]:.1f} 分"
+                              "<br>場均出手 %{x:.1f}｜TS% %{y:.1%}<extra></extra>",
+            ))
+            fig.add_vline(x=players["fga_pg"].median(), line=dict(color=MUTED, width=1, dash="dot"))
+            fig.add_hline(y=players["ts"].median(), line=dict(color=MUTED, width=1, dash="dot"))
+            fig.update_xaxes(title="場均投籃出手")
+            fig.update_yaxes(title="真實命中率 TS%", tickformat=".0%")
+            st.plotly_chart(style(fig, 440), use_container_width=True)
+        with right:
+            section("場均得分", f"{team_label(p_team)} {p_season}")
+            d = players.head(12).sort_values("ppg")
+            fig = go.Figure(go.Bar(
+                x=d["ppg"], y=d["player_name"], orientation="h", marker=dict(color=color),
+                text=[f"{v:.1f}" for v in d["ppg"]], textposition="outside", cliponaxis=False,
+                hovertemplate="<b>%{y}</b><br>場均 %{x:.1f} 分<extra></extra>",
+            ))
+            try:
+                fig.update_traces(marker_cornerradius=4)
+            except ValueError:
+                pass
+            fig.update_xaxes(showticklabels=False, showgrid=False)
+            fig.update_yaxes(showgrid=False)
+            st.plotly_chart(style(fig, 440), use_container_width=True)
+
+        st.divider()
+        name = st.selectbox("查看球員逐場得分", players["player_name"])
+        pid = int(players[players["player_name"] == name]["player_id"].iloc[0])
+        team_id = int(team_raw[team_raw["abbreviation"] == p_team]["team_id"].iloc[0])
+        g = load_player_games(pid, team_id, p_season)
+        g = g[g["season_type"].isin(types)] if not g.empty else g
+        if g.empty:
+            st.info("沒有逐場數據。")
+        else:
+            g["avg5"] = g["pts"].rolling(5, min_periods=1).mean()
+            section(f"{name} 逐場得分", "淺色點是單場得分，深色線是近 5 場平均")
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=g["game_date"], y=g["pts"], mode="markers", name="單場得分",
+                marker=dict(size=8, color=color, opacity=0.45,
+                            line=dict(width=1.5, color="rgba(255,255,255,0.95)")),
+                customdata=g[["matchup", "wl", "fgm", "fga", "fg3m", "fg3a"]].values,
+                hovertemplate="<b>%{x|%Y-%m-%d}</b>　%{customdata[0]}（%{customdata[1]}）<br>"
+                              "得分 %{y}｜投籃 %{customdata[2]}-%{customdata[3]}｜"
+                              "三分 %{customdata[4]}-%{customdata[5]}<extra></extra>",
+            ))
+            fig.add_trace(go.Scatter(
+                x=g["game_date"], y=g["avg5"], mode="lines", name="近 5 場平均",
+                line=dict(color=color, width=2.5, shape="spline", smoothing=0.6),
+                hovertemplate="近 5 場平均 %{y:.1f} 分<extra></extra>",
+            ))
+            fig.update_yaxes(title="得分", rangemode="tozero")
+            fig.update_layout(hovermode="x unified")
+            st.plotly_chart(style(fig, 380), use_container_width=True)
+
+
+# ---------- 5. 數據表 ----------
+with tab5:
+    section("球隊 × 球季 數據表", "可點欄位名稱排序；★ 為奪冠球季")
+    table = team_season.copy()
+    table["球隊"] = table["abbreviation"].map(team_label)
+    table["奪冠"] = table["champion"].map({True: "★", False: ""})
+    for c in ["win_pct", "ts", "fg_pct", "tpar", "fg3_pct"]:
+        table[c] = table[c] * 100
+    table = table[["球隊", "season", "奪冠", "games", "wins", "win_pct", "ppg", "ts", "fg_pct",
+                   "tpar", "fg3_pct", "fg3a_pg", "apg", "ast_tov"]]
+    st.dataframe(
+        table, hide_index=True, use_container_width=True, height=520,
+        column_config={
+            "season": "球季", "games": "場數", "wins": "勝場",
+            "win_pct": st.column_config.NumberColumn("勝率", format="%.1f%%"),
+            "ppg": st.column_config.NumberColumn("場均得分", format="%.1f"),
+            "ts": st.column_config.ProgressColumn("真實命中率", format="%.1f%%", min_value=50, max_value=62),
+            "fg_pct": st.column_config.NumberColumn("投籃命中率", format="%.1f%%"),
+            "tpar": st.column_config.NumberColumn("三分出手比例", format="%.1f%%"),
+            "fg3_pct": st.column_config.NumberColumn("三分命中率", format="%.1f%%"),
+            "fg3a_pg": st.column_config.NumberColumn("場均三分出手", format="%.1f"),
+            "apg": st.column_config.NumberColumn("場均助攻", format="%.1f"),
+            "ast_tov": st.column_config.NumberColumn("助攻失誤比", format="%.2f"),
+        },
+    )
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer) as writer:
+        table.to_excel(writer, sheet_name="球隊球季", index=False)
+    st.download_button("📥 下載 Excel", data=buffer.getvalue(), type="primary",
+                       file_name=f"champions_{s_from}_{s_to}.xlsx",
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    with st.expander("📖 指標說明"):
+        st.markdown("""
+| 指標 | 意思 | 算法 |
+|---|---|---|
+| 真實命中率 TS% | 把二分、三分、罰球都算進去，每次出手換到多少分 | 得分 ÷ [2 ×（出手 + 0.44 × 罰球出手）] |
+| 三分出手比例 | 全部出手中三分球佔幾成 | 三分出手 ÷ 全部出手 |
+| 三分命中率 | 三分球投進的比例 | 三分命中 ÷ 三分出手 |
+| 助攻失誤比 | 每一次失誤對應幾次助攻，越高代表傳球越穩 | 助攻 ÷ 失誤 |
+| 勝率 | 贏球場數比例 | 勝場 ÷ 場數 |
+""")
