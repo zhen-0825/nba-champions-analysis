@@ -20,9 +20,18 @@ import streamlit as st
 # =====================================================================
 TEAM_ZH = {"GSW": "勇士", "DEN": "金塊", "BOS": "塞爾提克", "OKC": "雷霆", "NYK": "尼克",
            "MIL": "公鹿", "LAL": "湖人", "TOR": "暴龍"}
-# 每支球隊固定一個顏色（深色背景用的色盲友善配色），不管怎麼篩選都不會變
-TEAM_COLORS = {"GSW": "#3987e5", "DEN": "#d95926", "BOS": "#199e70", "OKC": "#c98500",
-               "NYK": "#d55181", "MIL": "#2f9e44", "LAL": "#9085e9", "TOR": "#e66767"}
+# 每支球隊固定一個顏色，取自球衣主視覺色，並調亮到深色背景上看得清楚
+TEAM_COLORS = {
+    "GSW": "#3B6FD4",   # 勇士：皇家藍
+    "DEN": "#FFC72C",   # 金塊：陽光黃
+    "BOS": "#1E9E4A",   # 塞爾提克：塞爾提克綠
+    "OKC": "#22B8E8",   # 雷霆：雷霆藍
+    "NYK": "#F58426",   # 尼克：尼克橘
+    "MIL": "#EEE1C6",   # 公鹿：奶油白
+    "LAL": "#A070E6",   # 湖人：湖人紫
+    "TOR": "#D8264F",   # 暴龍：暴龍紅
+}
+DIM = "#4a4458"          # 聚焦模式下，未選取球隊的灰色
 # 球員比較用：依選取順序配色，最多 6 位
 PLAYER_COLORS = ["#a78bfa", "#3987e5", "#d95926", "#199e70", "#c98500", "#d55181"]
 TYPE_OPTIONS = {"例行賽": "Regular Season", "附加賽": "PlayIn", "季後賽": "Playoffs"}
@@ -131,6 +140,32 @@ section[data-testid="stSidebar"] h3 { font-family: 'Noto Serif TC', serif; lette
 /* 細節 */
 hr { border-color: rgba(167,139,250,0.14) !important; }
 [data-testid="stExpander"] { border: 1px solid rgba(167,139,250,0.16); border-radius: 12px; }
+.insight { border: 1px solid rgba(167,139,250,0.25); background: rgba(124,58,237,0.08); border-radius: 12px;
+           padding: 12px 18px; margin: 4px 0 8px 0; color: #d9d0f2; font-size: 0.92rem; line-height: 1.8; }
+.insight b { color: #f4f0ff; }
+/* 按鈕、選項：更大的點擊範圍、圓角、清楚的選取狀態 */
+.stButton > button, .stDownloadButton > button {
+  border-radius: 999px; padding: 0.55rem 1.3rem; font-weight: 500; letter-spacing: 0.04em;
+  border: 1px solid rgba(167,139,250,0.35); transition: all 0.15s ease; }
+.stButton > button:hover, .stDownloadButton > button:hover {
+  border-color: #a78bfa; box-shadow: 0 0 0 3px rgba(167,139,250,0.15); transform: translateY(-1px); }
+[data-testid="stBaseButton-pills"], [data-testid="stBaseButton-pillsActive"],
+[data-testid="stBaseButton-segmented_control"], [data-testid="stBaseButton-segmented_controlActive"] {
+  min-height: 2.3rem; padding: 0.3rem 0.95rem; font-size: 0.9rem; }
+[data-testid="stBaseButton-pillsActive"], [data-testid="stBaseButton-segmented_controlActive"] {
+  background: rgba(124,58,237,0.28) !important; border-color: #a78bfa !important; color: #f4f0ff !important; }
+section[data-testid="stSidebar"] [data-testid="stWidgetLabel"] p { font-size: 0.82rem; letter-spacing: 0.1em; color: #b7a4f5; }
+[data-testid="stDataFrame"] { border: 1px solid rgba(167,139,250,0.16); border-radius: 12px; overflow: hidden; }
+
+/* 精簡表格：只有橫向細線、數字靠右對齊 */
+.ntable { width: 100%; border-collapse: collapse; font-size: 0.9rem; margin: 4px 0 8px 0; }
+.ntable th { text-align: left; font-weight: 500; font-size: 0.74rem; letter-spacing: 0.12em; color: #9d93b8;
+             padding: 8px 12px; border-bottom: 1px solid rgba(167,139,250,0.30); }
+.ntable td { padding: 9px 12px; color: #e4ddf5; border-bottom: 1px solid rgba(167,139,250,0.08); }
+.ntable td.num, .ntable th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.ntable tr:hover td { background: rgba(124,58,237,0.08); }
+.ntable .pos { color: #c4b2ff; } .ntable .neg { color: #8a8399; }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px; position: relative; top: -1px; }
 .footnote { color: #6f6883; font-size: 0.78rem; text-align: center; margin-top: 36px; letter-spacing: 0.08em; }
 </style>
 """, unsafe_allow_html=True)
@@ -158,7 +193,7 @@ def style(fig, height):
         legend=dict(orientation="h", y=-0.16, x=0, font=dict(color=INK_2)),
         bargap=0.35,
     )
-    fig.update_xaxes(gridcolor=GRID, zeroline=False, showline=False,
+    fig.update_xaxes(showgrid=False, zeroline=False, showline=False,
                      tickfont=dict(color=INK_2), title_font=dict(color=INK_2))
     fig.update_yaxes(gridcolor=GRID, zeroline=False, showline=False,
                      tickfont=dict(color=INK_2), title_font=dict(color=INK_2))
@@ -178,6 +213,48 @@ def rounded(fig):
         fig.update_traces(marker_cornerradius=4)
     except ValueError:
         pass
+
+
+def seg(label, options, key, default=None):
+    """少量選項的單選：一排相連的按鈕（比下拉選單少點一次）"""
+    default = default or options[0]
+    try:
+        v = st.segmented_control(label, options, default=default, key=key)
+    except AttributeError:   # 舊版 Streamlit 沒有這個元件
+        v = st.radio(label, options, horizontal=True, key=key)
+    return v or default
+
+
+def pills(label, options, key, default=None, multi=False, format_func=str, where=st):
+    """膠囊按鈕：選項一眼看完，點一下就切換"""
+    try:
+        v = where.pills(label, options, selection_mode="multi" if multi else "single",
+                        default=default, format_func=format_func, key=key)
+    except AttributeError:
+        v = (where.multiselect(label, options, default=default, format_func=format_func, key=key) if multi
+             else where.selectbox(label, options, format_func=format_func, key=key))
+    if multi:
+        return list(v or [])
+    return v or (default if default is not None else options[0])
+
+
+def nice_table(df, num_cols=(), signed_cols=(), dot_col=None, colors=None):
+    """精簡的 HTML 表格：只有橫向細線，數字靠右；dot_col 欄位前面加上球隊顏色圓點"""
+    shown = [c for c in df.columns if not str(c).startswith("_")]   # 底線開頭的欄位不顯示
+    head = "".join(f'<th class="{"num" if c in num_cols else ""}">{c}</th>' for c in shown)
+    body = []
+    for _, r in df.iterrows():
+        cells = []
+        for c in shown:
+            v, cls = r[c], "num" if c in num_cols else ""
+            if c in signed_cols and isinstance(v, str) and v[:1] in "+-":
+                cls += " pos" if v.startswith("+") else " neg"
+            if c == dot_col and colors:
+                v = f'<span class="dot" style="background:{colors.get(r.get("_key"), MUTED)}"></span>{v}'
+            cells.append(f'<td class="{cls}">{v}</td>')
+        body.append("<tr>" + "".join(cells) + "</tr>")
+    st.markdown(f'<table class="ntable"><thead><tr>{head}</tr></thead><tbody>{"".join(body)}</tbody></table>',
+                unsafe_allow_html=True)
 
 
 def champion_bands(fig, seasons, team):
@@ -230,7 +307,12 @@ def load_data():
     champs = fetch_all("champions", ["season"])
     teams = fetch_all("teams", ["team_id"])
     champs = champs.merge(teams[["team_id", "abbreviation"]], on="team_id")
-    return team, players, champs
+    try:
+        league = fetch_all("league_team_seasons", ["season", "season_type", "team_id"])
+        league = league.merge(teams[["team_id", "abbreviation"]], on="team_id", how="left")
+    except Exception:
+        league = pd.DataFrame()
+    return team, players, champs, league
 
 
 @st.cache_data(ttl=3600, show_spinner="讀取逐場數據中…")
@@ -277,7 +359,7 @@ def add_metrics(d, games_col="games"):
     return d
 
 
-team_raw, player_raw, champs = load_data()
+team_raw, player_raw, champs, league = load_data()
 if team_raw.empty:
     st.error("資料庫裡還沒有資料，請先執行 load_to_supabase.py")
     st.stop()
@@ -293,13 +375,12 @@ P_COLS = ["gp", "min", "pts", "fgm", "fga", "fg3m", "fg3a", "ftm", "fta", "reb",
 # =====================================================================
 with st.sidebar:
     st.markdown("### 查詢條件")
-    teams_sel = st.multiselect("球隊", ALL_TEAMS, default=ALL_TEAMS, format_func=team_label)
+    teams_sel = pills("球隊", ALL_TEAMS, "teams", default=ALL_TEAMS, multi=True, format_func=team_label)
     s_from, s_to = st.select_slider("球季範圍", ALL_SEASONS,
                                     value=(ALL_SEASONS[0], ALL_SEASONS[-1]))
-    types_sel = st.multiselect("比賽類型", list(TYPE_OPTIONS), default=["例行賽"],
-                               help="跨球季比較建議只看例行賽：每隊每季都是 82 場左右，比較公平。"
-                                    "季後賽場數差很多，數字容易被少數比賽影響。")
-    metric_name = st.selectbox("球隊比較指標", list(METRICS))
+    types_sel = pills("比賽類型", list(TYPE_OPTIONS), "types", default=["例行賽"], multi=True)
+    st.caption("跨球季比較建議只看例行賽：每隊每季約 82 場，比較公平。")
+    metric_name = pills("球隊比較指標", list(METRICS), "metric", default=list(METRICS)[0])
     st.divider()
     st.caption("資料來源：NBA 官方數據（nba_api）→ Supabase 資料庫\n\n★ 代表該隊奪冠的球季")
 
@@ -346,22 +427,256 @@ kpi(k3, "比賽場數", f"{int(team_season['games'].sum()):,}", "所選球隊、
 kpi(k4, "範圍內奪冠球季", f"{int(team_season['champion'].sum())} 次", "圖上以 ★ 標示")
 st.write("")
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["球季趨勢", "球隊 × 球季", "冠軍球季比較", "球員", "數據表"])
+tab0, tab1, tab2, tab3, tab4, tab5 = st.tabs(
+    ["冠軍密碼", "球季趨勢", "球隊 × 球季", "冠軍球季比較", "球員", "數據表"])
+
+
+# ---------- 0. 冠軍密碼：三個問題 ----------
+FACTORS = [  # （名稱, 欄位, 數值越高越好?, 顯示格式）
+    ("淨效率", "net_rating", True, "signed"), ("進攻效率", "off_rating", True, "num1"),
+    ("防守效率", "def_rating", False, "num1"), ("真實命中率", "ts_pct", True, "pct"),
+    ("三分出手比例", "tpar", True, "pct"), ("三分命中率", "fg3_pct", True, "pct"),
+    ("失誤率", "tm_tov_pct", False, "pct"), ("進攻籃板率", "oreb_pct", True, "pct"),
+    ("防守籃板率", "dreb_pct", True, "pct"), ("助攻失誤比", "ast_to", True, "num2"),
+]
+STYLE = [("節奏", "pace", True), ("三分出手比例", "tpar", True), ("進攻效率", "off_rating", True),
+         ("防守效率", "def_rating", False), ("進攻籃板率", "oreb_pct", True),
+         ("助攻失誤比", "ast_to", True), ("失誤少", "tm_tov_pct", False)]
+RECENT = "2018-19"   # 2019 年起連續 8 年不同冠軍
+
+
+def show(v, kind):
+    if pd.isna(v):
+        return "-"
+    if kind == "pct":
+        return f"{(v if v > 1 else v * 100):.1f}%"
+    return {"signed": f"{v:+.1f}", "num1": f"{v:.1f}", "num2": f"{v:.2f}"}[kind]
+
+
+def insight(lines):
+    st.markdown('<div class="insight">' + "<br>".join(lines) + "</div>", unsafe_allow_html=True)
+
+
+with tab0:
+    if league.empty:
+        st.info("資料庫裡還沒有全聯盟數據，請先執行：python load_to_supabase.py --only league")
+    else:
+        champ_seasons = set(champs["season"])
+        LG = league[(league["season_type"] == "Regular Season") & league["season"].isin(champ_seasons)
+                    & (league["season"] >= s_from) & (league["season"] <= s_to)].copy()
+        num = ["gp", "w", "fga", "fg3a", "fg3m", "net_rating", "off_rating", "def_rating", "pace",
+               "ts_pct", "tm_tov_pct", "oreb_pct", "dreb_pct", "ast_to"]
+        for c in num:
+            LG[c] = pd.to_numeric(LG[c], errors="coerce")
+        LG["tpar"] = LG["fg3a"] / LG["fga"]
+        LG["fg3_pct"] = LG["fg3m"] / LG["fg3a"]
+        LG["fg3a_pg"] = LG["fg3a"] / LG["gp"]
+        LG["w_pct"] = LG["w"] / LG["gp"]
+        LG["champion"] = [(s, t) in set(zip(champs["season"], champs["team_id"]))
+                          for s, t in zip(LG["season"], LG["team_id"])]
+        for _, col, hb, *_ in FACTORS + [(None, "pace", True)]:
+            LG[f"rk_{col}"] = LG.groupby("season")[col].rank(ascending=not hb, method="min")
+        CH = LG[LG["champion"]].sort_values("season")
+        q_seasons = sorted(LG["season"].unique())
+
+        if CH.empty:
+            st.info("球季範圍內沒有已完成的冠軍球季，請把左側球季範圍拉大。")
+        else:
+            st.caption(f"以下三題都用全聯盟 30 隊的例行賽數據（{q_seasons[0]}～{q_seasons[-1]}，"
+                       f"共 {len(CH)} 位冠軍）；左側的球隊與比賽類型篩選不影響這一頁。")
+
+            # ===== Q1 =====
+            section("Q1　奪冠的最佳因素是什麼？",
+                    "每個點是一位冠軍在該項指標的聯盟排名（1 = 最好）；◆ 是中位數；越集中在左邊，越是冠軍的共同點")
+            summ = []
+            for label, col, hb, kind in FACTORS:
+                r = CH[f"rk_{col}"].dropna()
+                summ.append({"label": label, "col": col, "kind": kind,
+                             "median": r.median(), "top5": (r <= 5).mean(), "n": len(r)})
+            summ = pd.DataFrame(summ).sort_values(["median", "top5"], ascending=[True, False]).reset_index(drop=True)
+            n_f = len(summ)
+            fig = go.Figure()
+            fig.add_vrect(x0=0.5, x1=5.5, fillcolor="rgba(167,139,250,0.08)", line_width=0, layer="below")
+            fig.add_annotation(x=3, y=n_f - 0.35, text="聯盟前 5", showarrow=False,
+                               font=dict(size=11, color="#b7a4f5"))
+            for era, name, colr in [(False, f"{q_seasons[0][:4]}～2018 冠軍", "#7d7594"),
+                                    (True, "2019～2026 冠軍", ACCENT)]:
+                xs, ys, hov = [], [], []
+                for i, f in summ.iterrows():
+                    y0 = n_f - 1 - i
+                    for j, (_, r) in enumerate(CH.iterrows()):
+                        if (r["season"] >= RECENT) != era or pd.isna(r[f"rk_{f['col']}"]):
+                            continue
+                        xs.append(r[f"rk_{f['col']}"])
+                        ys.append(y0 + ((j % 5) - 2) * 0.09)
+                        hov.append(f"<b>{r['season']} {team_label(r['abbreviation'])}</b><br>"
+                                   f"{f['label']}：第 {int(r['rk_' + f['col']])} 名"
+                                   f"（{show(r[f['col']], f['kind'])}）")
+                fig.add_trace(go.Scatter(x=xs, y=ys, mode="markers", name=name, text=hov,
+                                         hovertemplate="%{text}<extra></extra>",
+                                         marker=dict(size=9, color=colr, opacity=0.85,
+                                                     line=dict(width=1, color="#0b0910"))))
+            fig.add_trace(go.Scatter(
+                x=summ["median"], y=[n_f - 1 - i for i in range(n_f)], mode="markers", name="中位數",
+                marker=dict(symbol="diamond", size=14, color="#f4f0ff", line=dict(width=2, color="#7c3aed")),
+                customdata=summ[["label", "top5"]].values,
+                hovertemplate="<b>%{customdata[0]}</b><br>冠軍排名中位數：第 %{x:.0f} 名"
+                              "<br>排聯盟前 5 的冠軍：%{customdata[1]:.0%}<extra></extra>"))
+            for i, f in summ.iterrows():
+                fig.add_annotation(x=31.2, y=n_f - 1 - i, xanchor="left", showarrow=False,
+                                   text=f"前5 {f['top5']:.0%}", font=dict(size=11, color=INK_2))
+            fig.update_xaxes(title="聯盟排名（1 = 最好，30 = 最差）", range=[0.3, 34.5],
+                             tickvals=[1, 5, 10, 15, 20, 25, 30])
+            fig.update_yaxes(tickvals=list(range(n_f)), ticktext=list(summ["label"][::-1]),
+                             showgrid=False, range=[-0.6, n_f - 0.2])
+            st.plotly_chart(style(fig, 90 + 46 * n_f), width="stretch")
+            best, worst = summ.iloc[0], summ.iloc[-1]
+            insight([
+                f"<b>最一致的因素：{best['label']}</b>：{int(best['n'])} 位冠軍的排名中位數是第 {best['median']:.0f} 名，"
+                f"{best['top5']:.0%} 排在聯盟前 5。",
+                f"<b>第二、三名：</b>{summ.iloc[1]['label']}（中位數第 {summ.iloc[1]['median']:.0f} 名）、"
+                f"{summ.iloc[2]['label']}（第 {summ.iloc[2]['median']:.0f} 名）。",
+                f"<b>最不一致：{worst['label']}</b>：中位數第 {worst['median']:.0f} 名，代表冠軍在這項上沒有共同特徵。",
+            ])
+            st.divider()
+
+            # ===== Q2 =====
+            section("Q2　三分球時代是否造就了近年的冠軍？",
+                    "灰線是聯盟平均，淡紫色帶是 30 隊的最低到最高，★ 是當季冠軍；要看的是冠軍「相對於同季聯盟」的位置")
+            q2_opts = {"三分出手比例": ("tpar", "pct"), "三分命中率": ("fg3_pct", "pct"),
+                       "場均三分出手": ("fg3a_pg", "num1")}
+            q2_name = seg("指標", list(q2_opts), "q2")
+            q2_col, q2_kind = q2_opts[q2_name]
+            g = LG.groupby("season")
+            avg = {"tpar": g["fg3a"].sum() / g["fga"].sum(), "fg3_pct": g["fg3m"].sum() / g["fg3a"].sum(),
+                   "fg3a_pg": g["fg3a"].sum() / g["gp"].sum()}[q2_col]
+            lo, hi = g[q2_col].min(), g[q2_col].max()
+            ch2 = CH.set_index("season")
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=hi.index, y=hi.values, mode="lines", line=dict(width=0),
+                                     showlegend=False, hoverinfo="skip"))
+            fig.add_trace(go.Scatter(x=lo.index, y=lo.values, mode="lines", line=dict(width=0),
+                                     fill="tonexty", fillcolor="rgba(167,139,250,0.13)",
+                                     name="30 隊範圍（最低～最高）", hoverinfo="skip"))
+            fig.add_trace(go.Scatter(x=avg.index, y=avg.values, mode="lines+markers", name="聯盟平均",
+                                     line=dict(color="#bdb6cf", width=2), marker=dict(size=5, color="#bdb6cf"),
+                                     hovertemplate="聯盟平均 %{y:" + (".1%" if q2_kind == "pct" else ".1f") + "}<extra></extra>"))
+            fig.add_trace(go.Scatter(
+                x=ch2.index, y=ch2[q2_col], mode="markers+text", name="冠軍",
+                text=ch2["abbreviation"], textposition="top center", textfont=dict(size=10, color=INK_2),
+                marker=dict(symbol="star", size=16, color=ACCENT, line=dict(width=1.2, color="#f4f0ff")),
+                hovertemplate="冠軍 %{text}　%{y:" + (".1%" if q2_kind == "pct" else ".1f") + "}<extra></extra>"))
+            fig.update_xaxes(categoryorder="array", categoryarray=q_seasons, type="category")
+            fig.update_yaxes(title=q2_name, tickformat=".0%" if q2_kind == "pct" else None)
+            fig.update_layout(hovermode="x unified")
+            st.plotly_chart(style(fig, 420), width="stretch")
+
+            diff = (ch2[q2_col] - avg.reindex(ch2.index))
+            scale = 100 if q2_kind == "pct" else 1
+            unit = "百分點" if q2_kind == "pct" else "次"
+            fig = go.Figure(go.Bar(
+                x=diff.index, y=diff.values * scale,
+                marker=dict(color=[ACCENT if v >= 0 else MUTED for v in diff.values]),
+                customdata=ch2[["abbreviation"]].values,
+                hovertemplate="%{x} 冠軍 %{customdata[0]}<br>比聯盟平均 %{y:+.1f} " + unit + "<extra></extra>"))
+            rounded(fig)
+            fig.add_hline(y=0, line=dict(color=INK_2, width=1))
+            fig.update_xaxes(categoryorder="array", categoryarray=q_seasons, type="category", showgrid=False)
+            fig.update_yaxes(title=f"冠軍 − 聯盟平均（{unit}）")
+            section(f"冠軍比聯盟平均多或少（{q2_name}）", "紫色＝高於聯盟平均，灰色＝低於聯盟平均")
+            st.plotly_chart(style(fig, 260), width="stretch")
+            above = int((diff > 0).sum())
+            recent = diff[diff.index >= RECENT]
+            insight([
+                f"<b>聯盟趨勢：</b>{q2_name}從 {q_seasons[0]} 的 {show(avg.iloc[0], q2_kind)} "
+                f"變成 {q_seasons[-1]} 的 {show(avg.iloc[-1], q2_kind)}。",
+                f"<b>冠軍 vs 聯盟：</b>{len(diff)} 位冠軍中有 {above} 位高於當季聯盟平均"
+                + (f"；2019 年後的 {len(recent)} 位中有 {int((recent > 0).sum())} 位。" if len(recent) else "。"),
+            ])
+            st.divider()
+
+            # ===== Q3 =====
+            section("Q3　為什麼這幾年冠軍球隊都不一樣？",
+                    "假設一：球隊實力差距變小。用 30 隊的標準差衡量：數值越小，代表強弱越接近")
+            q3_opts = {"淨效率": ("net_rating", ".1f"), "勝率": ("w_pct", ".1%")}
+            q3_name = seg("用哪個指標衡量實力", list(q3_opts), "q3")
+            q3_col, q3_fmt = q3_opts[q3_name]
+            sd = LG.groupby("season")[q3_col].std()
+            fig = go.Figure()
+            for i, s in enumerate(q_seasons):
+                if s >= RECENT:
+                    fig.add_vrect(x0=i - 0.5, x1=i + 0.5, fillcolor="rgba(167,139,250,0.08)",
+                                  line_width=0, layer="below")
+            if any(s >= RECENT for s in q_seasons):
+                fig.add_annotation(x=max(RECENT, q_seasons[0]), y=1.0, yref="paper", yanchor="bottom",
+                                   xanchor="left", showarrow=False, text="2019～2026　連續 8 年不同冠軍",
+                                   font=dict(size=11, color="#cbb8ff"))
+            fig.add_trace(go.Scatter(x=sd.index, y=sd.values, mode="lines+markers", name=f"{q3_name}標準差",
+                                     line=dict(color=ACCENT, width=2.4),
+                                     marker=dict(size=7, color=ACCENT, line=dict(width=1.5, color="#0b0910")),
+                                     hovertemplate="%{x}　標準差 %{y:" + q3_fmt + "}<extra></extra>"))
+            fig.update_xaxes(categoryorder="array", categoryarray=q_seasons, type="category")
+            fig.update_yaxes(title=f"30 隊{q3_name}的標準差", tickformat=".0%" if "%" in q3_fmt else None)
+            fig.update_layout(margin=dict(l=8, r=24, t=28, b=8), showlegend=False)
+            st.plotly_chart(style(fig, 360), width="stretch")
+            before, after = sd[sd.index < RECENT], sd[sd.index >= RECENT]
+            ch_recent = CH[CH["season"] >= RECENT]
+            lines = []
+            if len(before) and len(after):
+                change = after.mean() / before.mean() - 1
+                lines.append(f"<b>差距變化：</b>2019 年後平均標準差 {format(after.mean(), q3_fmt)}，"
+                             f"之前 {format(before.mean(), q3_fmt)}（{change:+.0%}）。"
+                             + ("差距確實變小。" if change < 0 else "差距並沒有變小，這個假設要再想想。"))
+            if len(ch_recent):
+                k = int((ch_recent["rk_net_rating"] == 1).sum())
+                lines.append(f"<b>最強的隊不一定奪冠：</b>2019 年後 {len(ch_recent)} 位冠軍中，"
+                             f"只有 {k} 位是例行賽淨效率第 1 名。")
+            insight(lines)
+
+            section("假設二：每支冠軍的打法都不同",
+                    "近年冠軍在各項打法的聯盟排名；越亮代表排名越前面。節奏第 1 = 最快，失誤少第 1 = 失誤最少")
+            HS = CH[CH["season"] >= RECENT] if len(ch_recent) else CH.tail(8)
+            labels = [f"{s} {team_label(a)}" for s, a in zip(HS["season"], HS["abbreviation"])]
+            for _, col, hb in STYLE:   # 節奏、失誤少的排名
+                if f"rk_{col}" not in LG:
+                    LG[f"rk_{col}"] = LG.groupby("season")[col].rank(ascending=not hb, method="min")
+            zr = [[LG.loc[idx, f"rk_{col}"] for _, col, _ in STYLE] for idx in HS.index]
+            fig = go.Figure(go.Heatmap(
+                z=zr, x=[s[0] for s in STYLE], y=labels, zmin=1, zmax=30,
+                colorscale=[[i / (len(PURPLE_RAMP) - 1), c] for i, c in enumerate(PURPLE_RAMP[::-1])],
+                xgap=3, ygap=3, showscale=False,
+                hovertemplate="%{y}<br>%{x}：聯盟第 %{z:.0f} 名<extra></extra>"))
+            for i, lab in enumerate(labels):
+                for j, (name, _, _) in enumerate(STYLE):
+                    v = zr[i][j]
+                    if pd.isna(v):
+                        continue
+                    fig.add_annotation(x=name, y=lab, showarrow=False, text=f"第 {int(v)}",
+                                       font=dict(size=11, color="#140e20" if v <= 8 else "#efeaf8"))
+            fig.update_yaxes(autorange="reversed", showgrid=False)
+            fig.update_xaxes(showgrid=False, side="top")
+            st.plotly_chart(style(fig, 90 + 46 * len(labels)), width="stretch")
+            st.caption("讀法：如果每一列亮的位置都不同，代表冠軍靠的是不同的打法，沒有單一的致勝公式。")
 
 
 # ---------- 1. 球季趨勢 ----------
 with tab1:
-    section(f"{metric_name}：各隊逐季變化", "每條線一支球隊；★ 是該隊奪冠的球季")
+    section(f"{metric_name}：各隊逐季變化", "★ 是該隊奪冠的球季；選擇聚焦球隊，其他球隊會變成灰色背景，線條就不會互相干擾")
+    focus = pills("聚焦球隊（可多選，不選＝全部上色）", teams_sel, "focus", default=[], multi=True,
+                  format_func=team_label)
     fig = go.Figure()
-    for abbr in teams_sel:
+    order = [a for a in teams_sel if a not in focus] + [a for a in teams_sel if a in focus]  # 聚焦的畫在最上層
+    for abbr in order:
         d = team_season[team_season["abbreviation"] == abbr].sort_values("season")
         if d.empty:
             continue
-        color = TEAM_COLORS.get(abbr, MUTED)
+        lit = not focus or abbr in focus
+        color = TEAM_COLORS.get(abbr, MUTED) if lit else DIM
         fig.add_trace(go.Scatter(
             x=d["season"], y=d[metric], mode="lines+markers", name=team_label(abbr),
-            line=dict(color=color, width=2),
-            marker=dict(size=7, color=color, line=dict(width=1.5, color="#0b0910")),
+            line=dict(color=color, width=2.6 if (focus and lit) else (2 if lit else 1.2)),
+            marker=dict(size=7 if lit else 4, color=color, line=dict(width=1.5, color="#0b0910")),
+            opacity=1 if lit else 0.55, showlegend=lit,
             customdata=d[["games", "wins"]].values,
             hovertemplate=f"<b>{team_label(abbr)}</b>　%{{y:{mfmt}}}"
                           "（%{customdata[1]} 勝 / %{customdata[0]} 場）<extra></extra>",
@@ -370,8 +685,13 @@ with tab1:
         if not c.empty:
             fig.add_trace(go.Scatter(
                 x=c["season"], y=c[metric], mode="markers", showlegend=False, hoverinfo="skip",
-                marker=dict(symbol="star", size=20, color=color, line=dict(width=1.5, color="#f4f0ff")),
+                marker=dict(symbol="star", size=20 if lit else 11, color=color,
+                            line=dict(width=1.5 if lit else 0, color="#f4f0ff")),
             ))
+        if lit:   # 線尾直接標上隊名，不用一直對照圖例
+            last = d.iloc[-1]
+            fig.add_annotation(x=last["season"], y=last[metric], text=abbr, showarrow=False,
+                               xanchor="left", xshift=10, font=dict(size=11, color=INK_2))
     fig.update_yaxes(title=metric_name, tickformat=".0%" if "%" in mfmt else None)
     fig.update_xaxes(title="球季", categoryorder="array", categoryarray=seasons)
     fig.update_layout(hovermode="x unified")
@@ -440,16 +760,18 @@ with tab3:
                 diff = r[metric] - others
                 diff_txt = "-" if pd.isna(diff) else (
                     f"{diff * 100:+.1f} 百分點" if "%" in mfmt else f"{diff:+.2f}")
-                rows.append({"冠軍球季": r["label"], metric_name: fmt(r[metric], mfmt),
+                rows.append({"_key": r["abbreviation"], "冠軍球季": r["label"], metric_name: fmt(r[metric], mfmt),
                              "其他球季平均": fmt(others, mfmt), "差距": diff_txt})
-            st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+            nice_table(pd.DataFrame(rows), num_cols=(metric_name, "其他球季平均", "差距"), signed_cols=("差距",),
+                       dot_col="冠軍球季", colors=TEAM_COLORS)
 
 
 # ---------- 4. 球員 ----------
 with tab4:
     c1, c2 = st.columns([1, 2])
     p_team = c1.selectbox("球隊", teams_sel, format_func=team_label, key="p_team")
-    mode = c2.radio("檢視方式", ["跨球季：在該隊的所有球季", "單一球季"], horizontal=True)
+    with c2:
+        mode = seg("檢視方式", ["跨球季：在該隊的所有球季", "單一球季"], "p_mode")
     color = TEAM_COLORS.get(p_team, ACCENT)
     team_id = int(team_raw[team_raw["abbreviation"] == p_team]["team_id"].iloc[0])
 
@@ -473,7 +795,8 @@ with tab4:
         names = career["player_name"].tolist()
         picked = c3.multiselect("選擇球員（最多 6 位）", names, default=names[:3], max_selections=6,
                                 help="依在這隊的總得分排序；只列出在這隊出賽至少 20 場的球員")
-        p_metric_name = c4.selectbox("球員指標", list(P_METRICS))
+        with c4:
+            p_metric_name = st.selectbox("球員指標", list(P_METRICS))
         p_metric, p_fmt = P_METRICS[p_metric_name]
 
         section(f"{p_metric_name}：球員在{team_label(p_team)}的逐季變化",
