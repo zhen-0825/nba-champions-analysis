@@ -910,8 +910,9 @@ with tab_shot:
             def court_axes(fig, height=500):
                 """把圖變成半場球場：畫線、隱藏座標軸、長寬等比例"""
                 fig.update_layout(shapes=court_shapes())
-                fig.update_xaxes(range=[-255, 255], visible=False)
-                fig.update_yaxes(range=[-55, 330], visible=False, scaleanchor="x", scaleratio=1)
+                fig.update_xaxes(range=[-255, 255], visible=False, fixedrange=True, constrain="domain")
+                fig.update_yaxes(range=[-55, 330], visible=False, fixedrange=True, constrain="domain",
+                                 scaleanchor="x", scaleratio=1)
                 fig = style(fig, height)
                 fig.update_layout(legend=dict(y=-0.02))
                 return fig
@@ -1225,7 +1226,8 @@ with tab_shot:
                     default_pick = (champ_cols + [s for s in seasons_mv if s not in champ_cols])[:3]
                     default_pick = sorted(default_pick)
                     pick = pills("並排比較的球季（最多 4 季）", seasons_mv, "mv_pick", default=default_pick,
-                                 multi=True, format_func=lambda s: s + (" ★" if s in champ_cols else ""))[:4]
+                                 multi=True, format_func=lambda s: s + (" ★" if s in champ_cols else ""))
+                    pick = sorted(pick)[:4]   # 不管點選順序，一律由舊到新排列
                     if pick:
                         # 各區在球場上的位置：用全隊檢視表的平均座標；沒有就用大概位置
                         pos_src = load_zone_team(sh_tid)
@@ -1271,15 +1273,16 @@ with tab_shot:
                                               "<br>命中率 %{customdata[3]:.1%}（vs 聯盟 %{customdata[4]:+.1f}）"
                                               "<extra></extra>", showlegend=False))
                             fig.update_layout(shapes=court_shapes())
-                            fig.update_xaxes(range=[-255, 255], visible=False)
-                            fig.update_yaxes(range=[-55, 330], visible=False, scaleanchor="x", scaleratio=1)
+                            fig.update_xaxes(range=[-255, 255], visible=False, fixedrange=True, constrain="domain")
+                            fig.update_yaxes(range=[-55, 330], visible=False, fixedrange=True, constrain="domain",
+                                             scaleanchor="x", scaleratio=1)   # 每張小球場比例、大小都一樣
                             star = " ★" if s in champ_cols else ""
                             c_.markdown(f'<div class="section-sub" style="margin-left:0;text-align:center">'
                                         f'<b style="color:#efeaff">{s}{star}</b>　出手 {int(f["fga"].sum()):,}</div>',
                                         unsafe_allow_html=True)
                             fig = style(fig, 280)
                             fig.update_layout(margin=dict(l=0, r=0, t=0, b=0))
-                            c_.plotly_chart(fig, width="stretch")
+                            c_.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
                         st.caption("每個小球場同一套規則：圈越大＝那季在這區出手越多；紫色＝比同季聯盟準、藍色＝比較不準。"
                                    "並排看，圈「變大變小」就是出手選擇的改變，「變紫變藍」就是命中區的改變。")
 
