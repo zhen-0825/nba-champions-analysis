@@ -385,26 +385,40 @@ def load_zone_league():
         return pd.DataFrame()
 
 
+VIEW_ERRORS = {}   # 檢視表讀取失敗時，把真正的錯誤訊息記下來顯示在畫面上
+
+
 @st.cache_data(ttl=3600)
+def _read_view(view, col, value):
+    """讀檢視表（成功才會被快取；失敗會丟出錯誤，Streamlit 不會記住失敗的結果）"""
+    rows, start, page = [], 0, 1000
+    while True:   # Supabase 一次最多回 1000 筆，所以一樣一頁一頁讀
+        part = (get_client().table(view).select("*").eq(col, value)
+                .order("season").order("zone_basic").order("zone_area")
+                .range(start, start + page - 1).execute().data)
+        rows += part
+        if len(part) < page:
+            return pd.DataFrame(rows)
+        start += page
+
+
+def load_view(view, col, value):
+    """回傳 DataFrame；讀不到就回傳 None，並把原因記在 VIEW_ERRORS"""
+    try:
+        return _read_view(view, col, int(value))
+    except Exception as e:
+        VIEW_ERRORS[view] = f"{type(e).__name__}: {e}"[:300]
+        return None
+
+
 def load_zone_team(team_id):
-    """球隊每季各區域出手彙總（需要先建立 shot_zone_team 檢視表）；不存在就回傳 None"""
-    try:
-        rows = (get_client().table("shot_zone_team").select("*")
-                .eq("team_id", team_id).limit(5000).execute().data)
-    except Exception:
-        return None
-    return pd.DataFrame(rows)
+    """球隊每季各區域出手彙總（需要先建立 shot_zone_team 檢視表）"""
+    return load_view("shot_zone_team", "team_id", team_id)
 
 
-@st.cache_data(ttl=3600)
 def load_zone_player(player_id):
-    """球員每季各區域出手彙總（需要先建立 shot_zone_player 檢視表）；不存在就回傳 None"""
-    try:
-        rows = (get_client().table("shot_zone_player").select("*")
-                .eq("player_id", player_id).limit(5000).execute().data)
-    except Exception:
-        return None
-    return pd.DataFrame(rows)
+    """球員每季各區域出手彙總（需要先建立 shot_zone_player 檢視表）"""
+    return load_view("shot_zone_player", "player_id", player_id)
 
 
 def add_metrics(d, games_col="games"):
@@ -1020,6 +1034,8 @@ with tab_shot:
                 st.info("這張逐季趨勢圖需要一個彙總檢視表（一次讀 10 季的逐筆出手太慢）。"
                         f"請到 Supabase SQL Editor 執行 docs/sql/2026-10-28_{view_file}.sql，"
                         "執行後按左側「重新讀取最新資料」。")
+                if view_file in VIEW_ERRORS:
+                    st.caption(f"讀取 {view_file} 的錯誤訊息（截圖給助教看）：{VIEW_ERRORS[view_file]}")
             else:
                 ts_team = share_by_season(zt) if not zt.empty else pd.Series(dtype=float)
                 ts_lg = share_by_season(zl) if not zl.empty else pd.Series(dtype=float)
@@ -1063,6 +1079,8 @@ with tab_shot:
                     "讀法：橫著看一列（同一區）顏色有沒有變深變淺；★ 是奪冠球季")
             if zt is None or zt.empty:
                 st.info(f"多季對照需要彙總檢視表：請到 Supabase SQL Editor 執行 docs/sql/2026-10-28_{view_file}.sql。")
+                if view_file in VIEW_ERRORS:
+                    st.caption(f"錯誤訊息：{VIEW_ERRORS[view_file]}")
             else:
                 m1, m2 = st.columns([4, 3])
                 with m1:
