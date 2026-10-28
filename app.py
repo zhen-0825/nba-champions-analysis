@@ -901,57 +901,91 @@ with tab_shot:
                     if shots_b.empty:
                         st.caption(f"{sh_pname} 在 {sh_season_b} 沒有替{TEAM_ZH.get(sh_team, sh_team)}出手的紀錄，"
                                    "請換一季，或改成和聯盟平均比較。")
-                b_label = f"{sh_season_b} {who}"
+                b_label = f"{sh_season_b} {who}" + ("★" if (sh_season_b, sh_team) in CHAMP_SET else "")
                 zb = zone_table(shots_to_zone_rows(shots_b)) if not shots_b.empty else pd.DataFrame()
             a_label = f"{sh_season} {who}" + ("★" if (sh_season, sh_team) in CHAMP_SET else "")
             color = TEAM_COLORS.get(sh_team, ACCENT)
 
             # ---- 球場圖 ----
-            left, right = st.columns([5, 4], gap="large")
-            with left:
-                fig = go.Figure()
-                if view == "每一次出手":
-                    made = shots_a["made"].astype(bool)
-                    ms = 5 if sh_pid is None else 8   # 單一球員點比較少，畫大一點
-                    for ok, name, mk in [(False, "沒進", dict(symbol="x", size=ms, color="#6f6883", opacity=0.6)),
-                                         (True, "投進", dict(size=ms, color=color, opacity=0.75))]:
-                        d = shots_a[made == ok]
-                        fig.add_trace(go.Scatter(
-                            x=d["loc_x"], y=d["loc_y"], mode="markers", name=name, marker=mk,
-                            customdata=d[["player_name", "shot_distance"]].values,
-                            hovertemplate="%{customdata[0]}　%{customdata[1]} 英尺<extra>" + name + "</extra>"))
-                    sub = f"每個點是一次出手：彩色＝投進、灰色 × ＝沒進（共 {len(shots_a):,} 次）"
-                else:
-                    zm = za.copy()
-                    if not zb.empty:
-                        zm = zm.merge(zb[["zone_basic", "zone_area", "fg_pct", "share"]],
-                                      on=["zone_basic", "zone_area"], how="left", suffixes=("", "_b"))
-                    else:
-                        zm["fg_pct_b"], zm["share_b"] = float("nan"), float("nan")
-                    zm["diff"] = (pd.to_numeric(zm["fg_pct"] - zm["fg_pct_b"], errors="coerce") * 100)
-                    size = 16 + 46 * (zm["share"] / zm["share"].max()) ** 0.5
-                    fig.add_trace(go.Scatter(
-                        x=zm["x"], y=zm["y"], mode="markers+text",
-                        text=[f"{v:.0%}" for v in zm["fg_pct"]], textfont=dict(size=11, color="#f4f0ff"),
-                        marker=dict(size=size, color=zm["diff"].fillna(0), cmin=-8, cmax=8,
-                                    colorscale=[[0, "#4f7cc9"], [0.5, "#3a3150"], [1, "#c58cff"]],
-                                    line=dict(width=1, color="rgba(244,240,255,0.35)"),
-                                    colorbar=dict(title=dict(text="命中率差<br>（百分點）", font=dict(size=11, color=INK_2)),
-                                                  thickness=10, outlinewidth=0, len=0.6,
-                                                  tickfont=dict(color=INK_2))),
-                        customdata=zm[["name", "fga", "share", "fg_pct", "fg_pct_b", "diff", "pps"]].values,
-                        hovertemplate="<b>%{customdata[0]}</b><br>出手 %{customdata[1]:,} 次（佔 %{customdata[2]:.1%}）"
-                                      "<br>命中率 %{customdata[3]:.1%}｜" + b_label + " %{customdata[4]:.1%}"
-                                      "<br>差距 %{customdata[5]:+.1f} 百分點｜每次出手 %{customdata[6]:.2f} 分"
-                                      "<extra></extra>", showlegend=False))
-                    sub = f"圈越大＝出手越多；圈內數字是命中率；紫色＝比「{b_label}」準、藍色＝比較不準"
+            def court_axes(fig, height=500):
+                """把圖變成半場球場：畫線、隱藏座標軸、長寬等比例"""
                 fig.update_layout(shapes=court_shapes())
                 fig.update_xaxes(range=[-255, 255], visible=False)
                 fig.update_yaxes(range=[-55, 330], visible=False, scaleanchor="x", scaleratio=1)
-                section(f"{a_label} 出手位置", sub)
-                fig = style(fig, 500)
+                fig = style(fig, height)
                 fig.update_layout(legend=dict(y=-0.02))
-                st.plotly_chart(fig, width="stretch")
+                return fig
+
+            def points_fig(df):
+                """每一次出手畫成一個點：投進＝球隊色圓點、沒進＝灰色 ×"""
+                fig = go.Figure()
+                made = df["made"].astype(bool)
+                ms = 5 if sh_pid is None else 8   # 單一球員點比較少，畫大一點
+                for ok, name, mk in [(False, "沒進", dict(symbol="x", size=ms, color="#6f6883", opacity=0.6)),
+                                     (True, "投進", dict(size=ms, color=color, opacity=0.75))]:
+                    d = df[made == ok]
+                    fig.add_trace(go.Scatter(
+                        x=d["loc_x"], y=d["loc_y"], mode="markers", name=name, marker=mk,
+                        customdata=d[["player_name", "shot_distance"]].values,
+                        hovertemplate="%{customdata[0]}　%{customdata[1]} 英尺<extra>" + name + "</extra>"))
+                return court_axes(fig)
+
+            def shot_summary(df):
+                """圖上方的一行摘要：出手數、命中率、三分出手比例"""
+                n = len(df)
+                fg = df["made"].astype(bool).mean() if n else float("nan")
+                three = df["zone_basic"].isin(["Left Corner 3", "Right Corner 3", "Above the Break 3"]).mean()
+                return f"出手 {n:,} 次｜命中率 {fg:.1%}｜三分出手佔 {three:.0%}"
+
+            # 「另一季」＋「每一次出手」：兩季的球場圖左右並排，一眼比較
+            two_up = view == "每一次出手" and vs == "另一季" and not zb.empty
+            if two_up:
+                ca, cb = st.columns(2, gap="large")
+                for c_, df_, lab in [(ca, shots_a, a_label), (cb, shots_b, b_label)]:
+                    with c_:
+                        section(f"{lab} 出手位置", shot_summary(df_))
+                        st.plotly_chart(points_fig(df_), width="stretch")
+                st.caption("兩張圖用同一套顏色和比例：彩色＝投進、灰色 × ＝沒進。"
+                           "比一比哪一區的點變多變少（出手選擇的改變）、哪一區彩色點變多（命中區的改變）。"
+                           "想換比較的球季，改上方的「球季」和「比較球季」。")
+                left, right = None, st.container()   # 下面的五大區對照改成整排寬
+            else:
+                left, right = st.columns([5, 4], gap="large")
+            if not two_up:   # 一般情況：左邊一張球場圖
+                with left:
+                    fig = go.Figure()
+                    if view == "每一次出手":
+                        fig = points_fig(shots_a)
+                        sub = f"每個點是一次出手：彩色＝投進、灰色 × ＝沒進。{shot_summary(shots_a)}"
+                        if vs == "另一季":
+                            sub += "（比較球季沒有資料，所以只顯示一張）"
+                    else:
+                        zm = za.copy()
+                        if not zb.empty:
+                            zm = zm.merge(zb[["zone_basic", "zone_area", "fg_pct", "share"]],
+                                          on=["zone_basic", "zone_area"], how="left", suffixes=("", "_b"))
+                        else:
+                            zm["fg_pct_b"], zm["share_b"] = float("nan"), float("nan")
+                        zm["diff"] = (pd.to_numeric(zm["fg_pct"] - zm["fg_pct_b"], errors="coerce") * 100)
+                        size = 16 + 46 * (zm["share"] / zm["share"].max()) ** 0.5
+                        fig.add_trace(go.Scatter(
+                            x=zm["x"], y=zm["y"], mode="markers+text",
+                            text=[f"{v:.0%}" for v in zm["fg_pct"]], textfont=dict(size=11, color="#f4f0ff"),
+                            marker=dict(size=size, color=zm["diff"].fillna(0), cmin=-8, cmax=8,
+                                        colorscale=[[0, "#4f7cc9"], [0.5, "#3a3150"], [1, "#c58cff"]],
+                                        line=dict(width=1, color="rgba(244,240,255,0.35)"),
+                                        colorbar=dict(title=dict(text="命中率差<br>（百分點）", font=dict(size=11, color=INK_2)),
+                                                      thickness=10, outlinewidth=0, len=0.6,
+                                                      tickfont=dict(color=INK_2))),
+                            customdata=zm[["name", "fga", "share", "fg_pct", "fg_pct_b", "diff", "pps"]].values,
+                            hovertemplate="<b>%{customdata[0]}</b><br>出手 %{customdata[1]:,} 次（佔 %{customdata[2]:.1%}）"
+                                          "<br>命中率 %{customdata[3]:.1%}｜" + b_label + " %{customdata[4]:.1%}"
+                                          "<br>差距 %{customdata[5]:+.1f} 百分點｜每次出手 %{customdata[6]:.2f} 分"
+                                          "<extra></extra>", showlegend=False))
+                        sub = f"圈越大＝出手越多；圈內數字是命中率；紫色＝比「{b_label}」準、藍色＝比較不準"
+                        fig = court_axes(fig)
+                    section(f"{a_label} 出手位置", sub)
+                    st.plotly_chart(fig, width="stretch")
 
             # ---- 五大區對照 ----
             with right:
