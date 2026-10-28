@@ -363,7 +363,7 @@ def load_shots(team_id, season, season_type):
     try:
         while True:
             part = (client.table("shots")
-                    .select("game_id,game_event_id,player_name,loc_x,loc_y,made,zone_basic,zone_area,shot_distance")
+                    .select("game_id,game_event_id,player_id,player_name,loc_x,loc_y,made,zone_basic,zone_area,shot_distance")
                     .eq("team_id", team_id).eq("season", season).eq("season_type", season_type)
                     .order("game_id").order("game_event_id")
                     .range(start, start + page - 1).execute().data)
@@ -391,6 +391,17 @@ def load_zone_team(team_id):
     try:
         rows = (get_client().table("shot_zone_team").select("*")
                 .eq("team_id", team_id).limit(5000).execute().data)
+    except Exception:
+        return None
+    return pd.DataFrame(rows)
+
+
+@st.cache_data(ttl=3600)
+def load_zone_player(player_id):
+    """球員每季各區域出手彙總（需要先建立 shot_zone_player 檢視表）；不存在就回傳 None"""
+    try:
+        rows = (get_client().table("shot_zone_player").select("*")
+                .eq("player_id", player_id).limit(5000).execute().data)
     except Exception:
         return None
     return pd.DataFrame(rows)
@@ -830,11 +841,27 @@ with tab_shot:
             sh_type = TYPE_OPTIONS[seg("比賽類型", ["例行賽", "季後賽"], "sh_type")]
         c4, c5 = st.columns([3, 4])
         with c4:
-            vs = seg("和誰比較", ["聯盟平均", "同隊另一季"], "sh_vs")
+            vs = seg("和誰比較", ["聯盟平均", "另一季"], "sh_vs")
         with c5:
             view = seg("球場圖顯示", ["分區命中率", "每一次出手"], "sh_view")
 
         shots_a = load_shots(sh_tid, sh_season, sh_type)
+        # 球員篩選：全隊，或這季在隊上出手的某一位球員（依出手數排序）
+        sh_pid, sh_pname = None, None
+        if not shots_a.empty and "player_id" in shots_a.columns:
+            cnt = (shots_a.groupby(["player_id", "player_name"]).size()
+                   .sort_values(ascending=False).reset_index(name="n"))
+            opts = [None] + cnt["player_id"].tolist()
+            names = dict(zip(cnt["player_id"], cnt["player_name"]))
+            nums = dict(zip(cnt["player_id"], cnt["n"]))
+            sh_pid = st.selectbox(
+                "球員（預設全隊；選一位球員就只看他的出手）", opts,
+                key=f"sh_player_{sh_team}_{sh_season}_{sh_type}",
+                format_func=lambda p: "全隊" if p is None else f"{names[p]}（{nums[p]:,} 次出手）")
+            if sh_pid is not None:
+                sh_pname = names[sh_pid]
+                shots_a = shots_a[shots_a["player_id"] == sh_pid]
+        who = sh_pname or TEAM_ZH.get(sh_team, sh_team)
         if shots_a.empty:
             st.info(f"{team_label(sh_team)} {sh_season} {'季後賽' if sh_type == 'Playoffs' else '例行賽'}"
                     "沒有投籃紀錄（可能那季沒打進季後賽，或這一季還沒載入）。")
@@ -851,13 +878,18 @@ with tab_shot:
                 prev = [s for s in shot_seasons if s < sh_season]
                 others = [s for s in shot_seasons if s != sh_season]
                 sh_season_b = st.selectbox(
-                    "比較球季（預設是前一季，看看奪冠前後的改變）", others,
+                    "比較球季（預設是前一季，看看奪冠前後的改變；選了球員就比他自己的另一季）", others,
                     index=others.index(prev[0]) if prev else 0, key=f"sh_b_{sh_team}_{sh_season}",
                     format_func=lambda s: s + ("　★ 奪冠" if (s, sh_team) in CHAMP_SET else ""))
                 shots_b = load_shots(sh_tid, sh_season_b, sh_type)
-                b_label = f"{sh_season_b} {TEAM_ZH.get(sh_team, sh_team)}"
+                if sh_pid is not None and not shots_b.empty:
+                    shots_b = shots_b[shots_b["player_id"] == sh_pid]
+                    if shots_b.empty:
+                        st.caption(f"{sh_pname} 在 {sh_season_b} 沒有替{TEAM_ZH.get(sh_team, sh_team)}出手的紀錄，"
+                                   "請換一季，或改成和聯盟平均比較。")
+                b_label = f"{sh_season_b} {who}"
                 zb = zone_table(shots_to_zone_rows(shots_b)) if not shots_b.empty else pd.DataFrame()
-            a_label = f"{sh_season} {TEAM_ZH.get(sh_team, sh_team)}" + ("★" if (sh_season, sh_team) in CHAMP_SET else "")
+            a_label = f"{sh_season} {who}" + ("★" if (sh_season, sh_team) in CHAMP_SET else "")
             color = TEAM_COLORS.get(sh_team, ACCENT)
 
             # ---- 球場圖 ----
@@ -866,8 +898,9 @@ with tab_shot:
                 fig = go.Figure()
                 if view == "每一次出手":
                     made = shots_a["made"].astype(bool)
-                    for ok, name, mk in [(False, "沒進", dict(symbol="x", size=5, color="#6f6883", opacity=0.6)),
-                                         (True, "投進", dict(size=5, color=color, opacity=0.75))]:
+                    ms = 5 if sh_pid is None else 8   # 單一球員點比較少，畫大一點
+                    for ok, name, mk in [(False, "沒進", dict(symbol="x", size=ms, color="#6f6883", opacity=0.6)),
+                                         (True, "投進", dict(size=ms, color=color, opacity=0.75))]:
                         d = shots_a[made == ok]
                         fig.add_trace(go.Scatter(
                             x=d["loc_x"], y=d["loc_y"], mode="markers", name=name, marker=mk,
@@ -945,10 +978,10 @@ with tab_shot:
                 three = ((ga.loc["底角三分", "share"] + ga.loc["弧頂三分", "share"])
                          - (gb.loc["底角三分", "share"] + gb.loc["弧頂三分", "share"])) * 100
                 rim = (ga.loc["禁區籃下", "share"] - gb.loc["禁區籃下", "share"]) * 100
-                lines.append(f"<b>出手選擇：</b>和{b_label}相比，中距離 {mid:+.1f}、三分 {three:+.1f}、"
+                lines.append(f"<b>出手選擇：</b>{who}和{b_label}相比，中距離 {mid:+.1f}、三分 {three:+.1f}、"
                              f"禁區籃下 {rim:+.1f} 個百分點。"
                              + ("中距離比較少、籃下或三分比較多，符合假設。" if mid < 0 and (three > 0 or rim > 0)
-                                else "沒有明顯「少投中距離」，這支隊伍可能靠別的方式贏球（例如中距離投得特別準）。"))
+                                else "沒有明顯「少投中距離」，可能靠別的方式得分（例如中距離投得特別準）。"))
             if not zb.empty:
                 zz = za.merge(zb[["zone_basic", "zone_area", "fg_pct"]], on=["zone_basic", "zone_area"],
                               suffixes=("", "_b"))
@@ -965,11 +998,13 @@ with tab_shot:
 
             # ---- 逐季趨勢（需要 shot_zone_team 檢視表）----
             st.divider()
-            section(f"{team_label(sh_team)} 每季出手選擇 vs 聯盟",
-                    "實線是球隊、灰線是聯盟平均，★ 是奪冠球季；看冠軍那一季是不是「特別偏離」聯盟或自己的習慣")
+            section(f"{sh_pname or team_label(sh_team)} 每季出手選擇 vs 聯盟",
+                    ("實線是球員（只含他在 8 支冠軍隊的球季）" if sh_pid is not None else "實線是球隊")
+                    + "、灰線是聯盟平均，★ 是奪冠球季；看冠軍那一季是不是「特別偏離」聯盟或自己的習慣")
             trend_grp = seg("區域", ["中距離", "三分（底角＋弧頂）", "禁區籃下"], "sh_trend")
-            zt = load_zone_team(sh_tid)
+            zt = load_zone_team(sh_tid) if sh_pid is None else load_zone_player(sh_pid)
             zl = load_zone_league()
+            view_file = "shot_zone_team" if sh_pid is None else "shot_zone_player"
 
             def share_by_season(df):
                 d = df[(df["season_type"] == sh_type) & df["zone_basic"].isin(ZONE_ZH)].copy()
@@ -983,7 +1018,7 @@ with tab_shot:
 
             if zt is None:
                 st.info("這張逐季趨勢圖需要一個彙總檢視表（一次讀 10 季的逐筆出手太慢）。"
-                        "請到 Supabase SQL Editor 執行 docs/sql/2026-10-28_shot_zone_team.sql，"
+                        f"請到 Supabase SQL Editor 執行 docs/sql/2026-10-28_{view_file}.sql，"
                         "執行後按左側「重新讀取最新資料」。")
             else:
                 ts_team = share_by_season(zt) if not zt.empty else pd.Series(dtype=float)
@@ -996,16 +1031,21 @@ with tab_shot:
                                              hovertemplate="聯盟 %{y:.1%}<extra></extra>"))
                 if not ts_team.empty:
                     fig.add_trace(go.Scatter(x=ts_team.index, y=ts_team.values, mode="lines+markers",
-                                             name=team_label(sh_team), line=dict(color=color, width=2.6),
+                                             name=sh_pname or team_label(sh_team), line=dict(color=color, width=2.6),
                                              marker=dict(size=7, color=color, line=dict(width=1.5, color="#0b0910")),
-                                             hovertemplate=TEAM_ZH.get(sh_team, sh_team) + " %{y:.1%}<extra></extra>"))
-                    cs = [s for s in ts_team.index if (s, sh_team) in CHAMP_SET]
+                                             hovertemplate=who + " %{y:.1%}<extra></extra>"))
+                    # 奪冠球季：球員可能換過隊，所以用「那一季他效力的球隊」判斷
+                    abbr_of = dict(zip(team_raw["team_id"], team_raw["abbreviation"]))
+                    team_by_season = (zt.groupby("season")["team_id"].first().map(abbr_of)
+                                      if sh_pid is not None else pd.Series(dtype=object))
+                    cs = [s for s in ts_team.index
+                          if (s, team_by_season.get(s, sh_team) if sh_pid is not None else sh_team) in CHAMP_SET]
                     if cs:
                         fig.add_trace(go.Scatter(x=cs, y=ts_team.reindex(cs).values, mode="markers", showlegend=False,
                                                  hoverinfo="skip", marker=dict(symbol="star", size=20, color=color,
                                                                                line=dict(width=1.5, color="#f4f0ff"))))
                     last = ts_team.index[-1]
-                    fig.add_annotation(x=last, y=ts_team.iloc[-1], text=sh_team, showarrow=False, xanchor="left",
+                    fig.add_annotation(x=last, y=ts_team.iloc[-1], text=sh_pname or sh_team, showarrow=False, xanchor="left",
                                        xshift=10, font=dict(size=11, color=INK_2))
                 if fig.data:
                     fig.update_xaxes(type="category", categoryorder="array",
@@ -1014,7 +1054,7 @@ with tab_shot:
                     fig.update_layout(hovermode="x unified")
                     st.plotly_chart(style(fig, 360), width="stretch")
                 else:
-                    st.info("檢視表已建立，但還沒有這支球隊的資料。")
+                    st.info("檢視表已建立，但還沒有這個選擇的資料。")
 
 
 # ---------- 1. 球季趨勢 ----------
