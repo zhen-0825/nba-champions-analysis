@@ -39,6 +39,8 @@ Streamlit 網頁：球季趨勢、球隊 × 球季交叉分析、冠軍球季比
 | `schema_league.sql` | 全聯盟球隊每季數據表（含攻守效率、對手數據） |
 | `load_extra.py` | 抓取 2016-17 起的投籃分布、戰術使用（Synergy）、5 人陣容、跑動距離，寫入 Supabase |
 | `schema_extra.sql` | 上述四種進階數據的資料表 |
+| `daily_update.py` / `daily_update.bat` | 每日自動更新：抓進行中球季的最新數據寫進 Supabase |
+| `setup_schedule.ps1` | 建立 Windows 工作排程，每天 15:30 自動執行更新 |
 | `views.sql` | 彙總檢視表（球隊球季、球員球季） |
 | `app.py` | Streamlit 網頁，從 Supabase 讀資料呈現 |
 | `Dockerfile` | Hugging Face Spaces 部署設定 |

@@ -13,6 +13,7 @@
   python load_extra.py --only playtypes            呼叫次數最多，大約 30 分鐘
   python load_extra.py --only shots                資料量最大，大約 20～30 分鐘
   python load_extra.py                             四種全部（約 1 小時以上）
+  python load_extra.py --current                   只更新進行中的這一季（每日自動更新用）
 
 需要先做好
   1. .env 裡有 SUPABASE_URL 和 SUPABASE_SECRET_KEY
@@ -27,7 +28,7 @@ from datetime import date
 
 import pandas as pd
 
-from fetch_nba import MAX_RETRIES, REQUEST_DELAY, TIMEOUT, season_is_finished, seasons_between
+from fetch_nba import MAX_RETRIES, REQUEST_DELAY, TIMEOUT, season_is_finished, season_of, seasons_between
 from load_to_supabase import CHAMPION_TEAMS, connect, upsert
 
 # ===== 設定區 =====
@@ -36,6 +37,7 @@ SEASON_TYPES = ["Regular Season", "Playoffs"]
 PLAY_TYPES = ["Isolation", "Transition", "PRBallHandler", "PRRollman", "Postup",
               "Spotup", "Handoff", "Cut", "OffScreen", "OffRebound", "Misc"]
 CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "extra")
+CURRENT_ONLY = False   # 執行時加 --current 會變成 True：只處理今天所在的球季
 # ==================
 
 SHOT_COLS = {"GAME_ID": "game_id", "GAME_EVENT_ID": "game_event_id", "GAME_DATE": "game_date",
@@ -116,6 +118,8 @@ def as_int(df, cols):
 
 
 def all_seasons():
+    if CURRENT_ONLY:
+        return [season_of(date.today())]
     return seasons_between(FIRST_SEASON_START, date.today())
 
 
@@ -283,7 +287,11 @@ def main():
     parser.add_argument("--only", choices=["shots", "playtypes", "lineups", "tracking"], help="只做其中一種")
     parser.add_argument("--teams", nargs="+", default=CHAMPION_TEAMS, help="投籃與陣容要抓的球隊")
     parser.add_argument("--dry-run", action="store_true", help="只抓資料、算筆數，不寫進資料庫")
+    parser.add_argument("--current", action="store_true", help="只更新進行中的這一季（每日自動更新用）")
     args = parser.parse_args()
+
+    global CURRENT_ONLY
+    CURRENT_ONLY = args.current
 
     client = None if args.dry_run else connect()
     if args.dry_run:

@@ -300,7 +300,7 @@ def fetch_all(table, order_cols, page=1000):
     return pd.DataFrame(rows)
 
 
-@st.cache_data(ttl=3600, show_spinner="從資料庫讀取資料中…")
+@st.cache_data(ttl=900, show_spinner="從資料庫讀取資料中…")   # 每 15 分鐘重新讀一次資料庫
 def load_data():
     team = fetch_all("team_season_stats", ["team_id", "season", "season_type"])
     players = fetch_all("player_season_stats", ["team_id", "season", "season_type", "player_id"])
@@ -315,7 +315,7 @@ def load_data():
     return team, players, champs, league
 
 
-@st.cache_data(ttl=3600, show_spinner="讀取逐場數據中…")
+@st.cache_data(ttl=900, show_spinner="讀取逐場數據中…")
 def load_player_games(player_id, team_id, season):
     """讀取某位球員在某隊、某球季的逐場數據"""
     client = get_client()
@@ -332,6 +332,17 @@ def load_player_games(player_id, team_id, season):
     df = df.merge(pd.DataFrame(tg), on="game_id", how="left")
     df["game_date"] = pd.to_datetime(df["game_date"])
     return df.sort_values("game_date")
+
+
+@st.cache_data(ttl=900)
+def latest_game_date():
+    """資料庫裡最新一場比賽的日期，用來顯示資料更新到哪一天"""
+    try:
+        rows = (get_client().table("games").select("game_date")
+                .order("game_date", desc=True).limit(1).execute().data)
+        return rows[0]["game_date"] if rows else None
+    except Exception:
+        return None
 
 
 def add_metrics(d, games_col="games"):
@@ -382,7 +393,12 @@ with st.sidebar:
     st.caption("跨球季比較建議只看例行賽：每隊每季約 82 場，比較公平。")
     metric_name = pills("球隊比較指標", list(METRICS), "metric", default=list(METRICS)[0])
     st.divider()
-    st.caption("資料來源：NBA 官方數據（nba_api）→ Supabase 資料庫\n\n★ 代表該隊奪冠的球季")
+    if st.button("重新讀取最新資料", width="stretch",
+                 help="網站每 15 分鐘會自動重讀資料庫；剛更新完資料想馬上看到，就按這裡"):
+        st.cache_data.clear()
+        st.rerun()
+    st.caption(f"資料更新至：{latest_game_date() or '未知'}\n\n"
+               "資料來源：NBA 官方數據（nba_api）→ Supabase 資料庫\n\n★ 代表該隊奪冠的球季")
 
 if not teams_sel or not types_sel:
     st.warning("請至少選擇一支球隊和一種比賽類型")
@@ -416,6 +432,7 @@ st.markdown(f"""
   <h1>NBA 冠軍球隊數據分析</h1>
   <div class="hero-sub">2019–2026 八屆冠軍，近二十年的數據軌跡</div>
   <span class="chip">{s_from} – {s_to}</span>
+  <span class="chip">資料更新至 {latest_game_date() or '未知'}</span>
   <span class="chip">{'・'.join(types_sel)}</span>{chips}
 </div>
 """, unsafe_allow_html=True)
