@@ -131,6 +131,25 @@ def team_ids(abbrs):
 # ---------------------------------------------------------------------
 # 1. 投籃分布
 # ---------------------------------------------------------------------
+def save_zones(client, raw, season, st):
+    """寫入聯盟各區域平均；這張是輔助用的小表，出問題只提醒、不中斷投籃資料"""
+    keys = ["zone_basic", "zone_area", "zone_range"]
+    zones = pick(raw, ZONE_COLS)
+    if not set(keys) <= set(zones.columns):
+        print(f"    聯盟區域平均缺少區域欄位，略過（NBA 給的欄位：{list(raw.columns)[:8]}）")
+        return
+    zones = zones.dropna(subset=keys)               # NBA 有些列沒有區域名稱，資料表不允許空白
+    if zones.empty:
+        return
+    zones.insert(0, "season", season)
+    zones.insert(1, "season_type", st)
+    zones = zones.drop_duplicates(keys)
+    try:
+        upsert(client, "shot_zone_league", zones, "season,season_type,zone_basic,zone_area,zone_range")
+    except Exception as e:
+        print(f"    聯盟區域平均寫入失敗，略過：{str(e)[:120]}")
+
+
 def load_shots(client, abbrs):
     from nba_api.stats.endpoints import shotchartdetail
 
@@ -161,11 +180,7 @@ def load_shots(client, abbrs):
 
                 # 聯盟各區域平均：每季每種比賽類型只要存一次
                 if (season, st) not in done_zones and len(frames) > 1 and not frames[1].empty:
-                    zones = pick(frames[1], ZONE_COLS)
-                    zones.insert(0, "season", season)
-                    zones.insert(1, "season_type", st)
-                    zones = zones.drop_duplicates(["zone_basic", "zone_area", "zone_range"])
-                    upsert(client, "shot_zone_league", zones, "season,season_type,zone_basic,zone_area,zone_range")
+                    save_zones(client, frames[1], season, st)
                     done_zones.add((season, st))
 
 
