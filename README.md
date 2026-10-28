@@ -43,7 +43,6 @@ Streamlit 網頁：球季趨勢、球隊 × 球季交叉分析、冠軍球季比
 | `setup_schedule.ps1` | 建立 Windows 工作排程，每天 15:30 自動執行更新 |
 | `views.sql` | 彙總檢視表（球隊球季、球員球季） |
 | `app.py` | Streamlit 網頁，從 Supabase 讀資料呈現 |
-| `Dockerfile` | Hugging Face Spaces 部署設定 |
 
 ## 本機執行
 
