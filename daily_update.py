@@ -27,7 +27,8 @@ def run(args, log):
     """執行另一支 Python 程式，訊息同時顯示在畫面上、寫進記錄檔"""
     log.write(f"\n>>> python {' '.join(args)}\n")
     print(f"\n>>> python {' '.join(args)}", flush=True)
-    env = dict(os.environ, PYTHONIOENCODING="utf-8")   # 讓中文訊息不會變亂碼
+    # PYTHONIOENCODING：中文訊息不變亂碼；PYTHONUNBUFFERED：訊息即時顯示，不要累積到最後才一次出現
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
     proc = subprocess.Popen([sys.executable] + args, cwd=HERE, env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     for line in proc.stdout:
