@@ -1056,6 +1056,181 @@ with tab_shot:
                 else:
                     st.info("檢視表已建立，但還沒有這個選擇的資料。")
 
+            # ---- 多季對照：一眼看出出手選擇與命中區的變化 ----
+            st.divider()
+            section(f"{who} 多季對照：出手選擇與命中區有沒有改變？",
+                    "問題：奪冠那幾季的出手位置和準度，跟其他球季比起來有沒有明顯轉變？　"
+                    "讀法：橫著看一列（同一區）顏色有沒有變深變淺；★ 是奪冠球季")
+            if zt is None or zt.empty:
+                st.info(f"多季對照需要彙總檢視表：請到 Supabase SQL Editor 執行 docs/sql/2026-10-28_{view_file}.sql。")
+            else:
+                m1, m2 = st.columns([4, 3])
+                with m1:
+                    mv_metric = seg("顏色代表", ["出手佔比", "命中率", "命中率 vs 聯盟"], "mv_metric")
+                with m2:
+                    mv_level = seg("區域分法", ["五大區", "細分區域"], "mv_level")
+
+                def per_season(df):
+                    """每季 × 每區：出手、命中、佔比（該季出手中佔幾成）、命中率"""
+                    d = df[(df["season_type"] == sh_type) & df["zone_basic"].isin(ZONE_ZH)].copy()
+                    if d.empty:
+                        return pd.DataFrame()
+                    for c in ["fga", "fgm"]:
+                        d[c] = pd.to_numeric(d[c], errors="coerce")
+                    d["key"] = (d["zone_basic"].map(ZONE_GROUP) if mv_level == "五大區" else
+                                d["zone_basic"].map(ZONE_ZH) + d["zone_area"].map(lambda a: f"（{AREA_ZH.get(a, a)}）"))
+                    g = d.groupby(["season", "key"], as_index=False)[["fga", "fgm"]].sum()
+                    g["share"] = g["fga"] / g.groupby("season")["fga"].transform("sum")
+                    g["fg_pct"] = (g["fgm"] / g["fga"].where(g["fga"] > 0)).astype(float)
+                    return g
+
+                ms = per_season(zt)
+                ml = per_season(zl) if not zl.empty else pd.DataFrame()
+                if ms.empty:
+                    st.info("這個選擇在這種比賽類型沒有多季資料。")
+                else:
+                    if not ml.empty:
+                        ms = ms.merge(ml[["season", "key", "fg_pct"]].rename(columns={"fg_pct": "lg_pct"}),
+                                      on=["season", "key"], how="left")
+                    else:
+                        ms["lg_pct"] = float("nan")
+                    ms["vs_lg"] = (ms["fg_pct"] - ms["lg_pct"]) * 100
+                    # 出手太少的格子命中率不可靠（例如 3 投 2 中 = 67%），命中率類指標就不上色
+                    few = ms["fga"] < (10 if sh_pid is not None else 30)
+                    col, ffmt = {"出手佔比": ("share", ".0%"), "命中率": ("fg_pct", ".0%"),
+                                 "命中率 vs 聯盟": ("vs_lg", "+.1f")}[mv_metric]
+                    if col != "share":
+                        ms.loc[few, col] = float("nan")
+                    seasons_mv = sorted(ms["season"].unique())
+                    keys = [k for k in (GROUP_ORDER if mv_level == "五大區" else
+                                        sorted(ms["key"].unique(), key=lambda k: (
+                                            GROUP_ORDER.index(ZONE_GROUP[next(z for z, n in ZONE_ZH.items()
+                                                                              if k.startswith(n))]), k)))
+                            if k in set(ms["key"])]
+                    pv = ms.pivot(index="key", columns="season", values=col).reindex(index=keys, columns=seasons_mv)
+                    fga_pv = ms.pivot(index="key", columns="season", values="fga").reindex(index=keys, columns=seasons_mv)
+
+                    # 每一季他效力的球隊（球員可能換隊），用來判斷是不是奪冠球季
+                    abbr_of = dict(zip(team_raw["team_id"], team_raw["abbreviation"]))
+                    tm = zt[zt["season_type"] == sh_type].groupby("season")["team_id"].first().map(abbr_of)
+                    xlab = [s + (" ★" if (s, tm.get(s, sh_team)) in CHAMP_SET else "") for s in seasons_mv]
+
+                    if col == "vs_lg":
+                        scale, zmin, zmax = [[0, "#4f7cc9"], [0.5, "#3a3150"], [1, "#c58cff"]], -8, 8
+                    else:
+                        scale = [[i / (len(PURPLE_RAMP) - 1), c] for i, c in enumerate(PURPLE_RAMP)]
+                        zmin, zmax = None, None
+                    z = pv.values.astype(float)
+                    fig = go.Figure(go.Heatmap(
+                        z=z, x=xlab, y=keys, colorscale=scale, zmin=zmin, zmax=zmax, xgap=3, ygap=3,
+                        customdata=fga_pv.values,
+                        colorbar=dict(thickness=10, outlinewidth=0, len=0.8, tickfont=dict(color=INK_2),
+                                      tickformat=".0%" if col != "vs_lg" else None),
+                        hovertemplate="%{y}　%{x}<br>" + mv_metric + "：%{z:" + ffmt + "}"
+                                      + ("（百分點）" if col == "vs_lg" else "")
+                                      + "<br>出手 %{customdata:,.0f} 次<extra></extra>"))
+                    lo = pd.Series(z.ravel()).min()
+                    hi = pd.Series(z.ravel()).max()
+                    for i, k in enumerate(keys):
+                        for j, s in enumerate(xlab):
+                            v = z[i, j]
+                            if pd.isna(v):
+                                continue
+                            bright = (abs(v) > 5) if col == "vs_lg" else ((v - lo) / ((hi - lo) or 1) > 0.6)
+                            txt = f"{v:+.0f}" if col == "vs_lg" else f"{v:.0%}"
+                            fig.add_annotation(x=s, y=k, text=txt, showarrow=False,
+                                               font=dict(size=10.5, color="#140e20" if bright and col != "vs_lg"
+                                                         else "#efeaf8"))
+                    fig.update_yaxes(autorange="reversed", showgrid=False)
+                    fig.update_xaxes(showgrid=False, side="top")
+                    st.plotly_chart(style(fig, 90 + 40 * len(keys)), width="stretch")
+                    st.caption("空白格＝那季沒有出手，或出手太少（命中率不可靠）所以不上色。"
+                               "「命中率 vs 聯盟」的數字是百分點：+5 代表比同季聯盟平均準 5 個百分點。")
+
+                    # 自動讀法：變化最大的區域
+                    if len(seasons_mv) >= 2:
+                        sh_pv = ms.pivot(index="key", columns="season", values="share").reindex(columns=seasons_mv)
+                        pct_pv = ms.assign(fg=ms["fg_pct"].where(~few)).pivot(index="key", columns="season",
+                                                                               values="fg").reindex(columns=seasons_mv)
+                        rng = (sh_pv.max(axis=1) - sh_pv.min(axis=1)).dropna()
+                        lines = []
+                        if not rng.empty:
+                            k = rng.idxmax()
+                            lines.append(f"<b>出手選擇變化最大：</b>{k}，佔比在 {sh_pv.loc[k].idxmin()} 最低"
+                                         f"（{sh_pv.loc[k].min():.0%}）、{sh_pv.loc[k].idxmax()} 最高"
+                                         f"（{sh_pv.loc[k].max():.0%}）。")
+                        prng = (pct_pv.max(axis=1) - pct_pv.min(axis=1)).dropna()
+                        if not prng.empty:
+                            k = prng.idxmax()
+                            lines.append(f"<b>命中率起伏最大：</b>{k}，從 {pct_pv.loc[k].min():.0%}"
+                                         f"（{pct_pv.loc[k].idxmin()}）到 {pct_pv.loc[k].max():.0%}"
+                                         f"（{pct_pv.loc[k].idxmax()}）。")
+                        lines.append("接著問「為什麼」：那一季換了教練、隊友，還是受傷？這就是從數據走到故事的一步。")
+                        insight(lines)
+
+                    # 小球場並排：選幾季放在一起看
+                    champ_cols = [s for s, lab in zip(seasons_mv, xlab) if "★" in lab]
+                    default_pick = (champ_cols + [s for s in seasons_mv if s not in champ_cols])[:3]
+                    default_pick = sorted(default_pick)
+                    pick = pills("並排比較的球季（最多 4 季）", seasons_mv, "mv_pick", default=default_pick,
+                                 multi=True, format_func=lambda s: s + (" ★" if s in champ_cols else ""))[:4]
+                    if pick:
+                        # 各區在球場上的位置：用全隊檢視表的平均座標；沒有就用大概位置
+                        pos_src = load_zone_team(sh_tid)
+                        if pos_src is not None and not pos_src.empty and "avg_x" in pos_src.columns:
+                            ps = pos_src.assign(w=pd.to_numeric(pos_src["fga"], errors="coerce"),
+                                                ax=pd.to_numeric(pos_src["avg_x"], errors="coerce"),
+                                                ay=pd.to_numeric(pos_src["avg_y"], errors="coerce"))
+                            ps["wx"], ps["wy"] = ps["ax"] * ps["w"], ps["ay"] * ps["w"]
+                            pg = ps.groupby(["zone_basic", "zone_area"])[["wx", "wy", "w"]].sum()
+                            POS = {k: (r["wx"] / r["w"], r["wy"] / r["w"]) for k, r in pg.iterrows() if r["w"]}
+                        else:
+                            POS = {}
+                        fine = zt[(zt["season_type"] == sh_type) & zt["zone_basic"].isin(ZONE_ZH)].copy()
+                        for c in ["fga", "fgm"]:
+                            fine[c] = pd.to_numeric(fine[c], errors="coerce")
+                        cols = st.columns(len(pick))
+                        for c_, s in zip(cols, pick):
+                            f = (fine[fine["season"] == s].groupby(["zone_basic", "zone_area"], as_index=False)
+                                 [["fga", "fgm"]].sum())
+                            f = f[[(a, b) in POS for a, b in zip(f["zone_basic"], f["zone_area"])]]
+                            if f.empty:
+                                c_.caption(f"{s}：沒有資料")
+                                continue
+                            f["x"] = [POS[(a, b)][0] for a, b in zip(f["zone_basic"], f["zone_area"])]
+                            f["y"] = [POS[(a, b)][1] for a, b in zip(f["zone_basic"], f["zone_area"])]
+                            f["share"] = f["fga"] / f["fga"].sum()
+                            f["fg"] = (f["fgm"] / f["fga"].where(f["fga"] > 0)).astype(float)
+                            lgs = zl[(zl["season"] == s) & (zl["season_type"] == sh_type)] if not zl.empty else zl
+                            if not lgs.empty:
+                                lz = zone_table(lgs)[["zone_basic", "zone_area", "fg_pct"]]
+                                f = f.merge(lz, on=["zone_basic", "zone_area"], how="left")
+                            else:
+                                f["fg_pct"] = float("nan")
+                            f["d"] = ((f["fg"] - f["fg_pct"]) * 100).astype(float)
+                            fig = go.Figure(go.Scatter(
+                                x=f["x"], y=f["y"], mode="markers",
+                                marker=dict(size=8 + 34 * (f["share"] / 0.35).clip(upper=1) ** 0.5,
+                                            color=f["d"].fillna(0), cmin=-8, cmax=8,
+                                            colorscale=[[0, "#4f7cc9"], [0.5, "#3a3150"], [1, "#c58cff"]],
+                                            line=dict(width=1, color="rgba(244,240,255,0.35)")),
+                                customdata=f[["zone_basic", "fga", "share", "fg", "d"]].values,
+                                hovertemplate="%{customdata[0]}<br>出手 %{customdata[1]:,.0f}（%{customdata[2]:.0%}）"
+                                              "<br>命中率 %{customdata[3]:.1%}（vs 聯盟 %{customdata[4]:+.1f}）"
+                                              "<extra></extra>", showlegend=False))
+                            fig.update_layout(shapes=court_shapes())
+                            fig.update_xaxes(range=[-255, 255], visible=False)
+                            fig.update_yaxes(range=[-55, 330], visible=False, scaleanchor="x", scaleratio=1)
+                            star = " ★" if s in champ_cols else ""
+                            c_.markdown(f'<div class="section-sub" style="margin-left:0;text-align:center">'
+                                        f'<b style="color:#efeaff">{s}{star}</b>　出手 {int(f["fga"].sum()):,}</div>',
+                                        unsafe_allow_html=True)
+                            fig = style(fig, 280)
+                            fig.update_layout(margin=dict(l=0, r=0, t=0, b=0))
+                            c_.plotly_chart(fig, width="stretch")
+                        st.caption("每個小球場同一套規則：圈越大＝那季在這區出手越多；紫色＝比同季聯盟準、藍色＝比較不準。"
+                                   "並排看，圈「變大變小」就是出手選擇的改變，「變紫變藍」就是命中區的改變。")
+
 
 # ---------- 1. 球季趨勢 ----------
 with tab1:
