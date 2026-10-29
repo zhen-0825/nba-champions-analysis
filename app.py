@@ -173,6 +173,8 @@ hr { border-color: var(--line) !important; }
 .insight { border: 1px solid #ddd0fb; background: var(--brand-soft); border-radius: 12px;
            padding: 12px 18px; margin: 6px 0 10px 0; color: #2d2245; font-size: 0.92rem; line-height: 1.8; }
 .insight b { color: #4c1d95; }
+.insight-k { display: inline-block; font-size: 0.74rem; font-weight: 700; color: #ffffff; background: var(--brand);
+             border-radius: 4px; padding: 0 7px; margin-right: 10px; line-height: 1.7; }
 
 /* ===== 按鈕、選項 ===== */
 .stButton > button, .stDownloadButton > button { border-radius: 999px; padding: 0.5rem 1.2rem; font-weight: 500; }
@@ -226,8 +228,10 @@ def hypothesis(question, guess):
 
 
 def section(title, sub=""):
+    """區塊標題＋一行說明；回傳一個緊接在標題下方的空位，之後可以把「結論」放進去（先讀結論再看圖）"""
     st.markdown(f'<div class="section-title">{title}</div>'
                 f'<div class="section-sub">{sub}</div>', unsafe_allow_html=True)
+    return st.container()
 
 
 def style(fig, height):
@@ -605,6 +609,55 @@ else:
                 f'<h2>{name}</h2><div class="pq">{question}</div></div>', unsafe_allow_html=True)
 
 
+def split_teams(available, s_from, s_to):
+    """把球隊分成「這段期間拿過冠軍」和「其他球隊」兩區（冠軍隊排前面，依奪冠年份）"""
+    won = {}
+    for s_, a_ in CHAMP_SET:
+        if s_from <= s_ <= s_to and a_ in available:
+            won.setdefault(a_, s_)
+            won[a_] = min(won[a_], s_)
+    champs_ = sorted(won, key=lambda a_: won[a_])
+    others_ = [a_ for a_ in available if a_ not in won]
+    return champs_, others_
+
+
+def team_picker(s_from, s_to, current):
+    """多選：冠軍隊一區、其他球隊一區，兩區各自勾選、互不影響；年份範圍一改，兩區的球隊跟著換"""
+    champs_, others_ = split_teams(ALL_TEAMS + EXTRA_TEAMS, s_from, s_to)
+    k = f"{s_from}_{s_to}"   # 年份改了，選項就換一組
+    sel_c = pills(f"奪冠球隊（{s_from}～{s_to} 拿過冠軍，{len(champs_)} 隊）", champs_, f"w_tc_{k}",
+                  default=[a_ for a_ in current if a_ in champs_], multi=True, format_func=team_label) if champs_ else []
+    if others_:
+        sel_o = pills(f"其他球隊（這段期間沒有奪冠，{len(others_)} 隊）", others_, f"w_to_{k}",
+                      default=[a_ for a_ in current if a_ in others_], multi=True, format_func=team_label)
+    else:
+        sel_o = []
+    n_left = 30 - len(ALL_TEAMS) - len(EXTRA_TEAMS)
+    if n_left > 0:
+        st.caption(f"資料庫目前有 {30 - n_left} 隊的球員逐場數據，還有 {n_left} 隊每天陸續載入中。")
+    return sel_c + sel_o
+
+
+def _clear(key):
+    st.session_state[key] = None
+
+
+def team_picker_one(champs_, others_, key, champ_label, other_label):
+    """單選版：兩區各一排按鈕，點了其中一區，另一區的選取會自動取消，所以永遠只選一隊"""
+    kc, ko = f"{key}_c", f"{key}_o"
+    if st.session_state.get(kc) is None and st.session_state.get(ko) is None and champs_:
+        st.session_state[kc] = champs_[0]   # 第一次打開：預設選第一支冠軍隊
+    try:
+        a = st.pills(champ_label, champs_, selection_mode="single", key=kc, format_func=team_label,
+                     on_change=_clear, args=(ko,))
+        b = st.pills(other_label, others_, selection_mode="single", key=ko, format_func=team_label,
+                     on_change=_clear, args=(kc,)) if others_ else None
+    except AttributeError:   # 舊版 Streamlit 沒有 pills
+        allt = champs_ + others_
+        return st.selectbox(champ_label, allt, format_func=team_label, key=key)
+    return a or b or (champs_[0] if champs_ else others_[0])
+
+
 # =====================================================================
 # 篩選列：只在「需要」的頁面出現，而且只顯示這頁用得到的條件
 # 換頁時條件會記住（存在 st.session_state 的 keep_ 開頭變數）
@@ -627,12 +680,7 @@ if NEED:
     except TypeError:
         bar = st.container()
     with bar:
-        if "team" in NEED:
-            teams_sel = pills("球隊", ALL_TEAMS + EXTRA_TEAMS, "w_teams", default=teams_sel, multi=True,
-                              format_func=team_label)
-            if EXTRA_TEAMS:
-                st.caption(f"八支冠軍隊預設勾選；另外已載入 {len(EXTRA_TEAMS)} 隊，點一下就能加入比較"
-                           f"（還有 {30 - len(ALL_TEAMS) - len(EXTRA_TEAMS)} 隊每天陸續載入中）。")
+        # 先選年份與條件，球隊再依「這段期間有沒有奪冠」分成兩區
         f1, f2, f3 = st.columns([3, 2, 4])
         if "season" in NEED:
             with f1:
@@ -643,6 +691,8 @@ if NEED:
         if "metric" in NEED:
             with f3:
                 metric_name = pills("比較指標", list(METRICS), "w_metric", default=metric_name)
+        if "team" in NEED:
+            teams_sel = team_picker(s_from, s_to, teams_sel)
         if "type" in NEED:
             st.caption("跨球季比較建議只看例行賽：每隊每季約 82 場，比較公平。")
     keep["keep_teams"], keep["keep_range"] = teams_sel, (s_from, s_to)
@@ -720,8 +770,10 @@ def show(v, kind):
     return {"signed": f"{v:+.1f}", "num1": f"{v:.1f}", "num2": f"{v:.2f}"}[kind]
 
 
-def insight(lines):
-    st.markdown('<div class="insight">' + "<br>".join(lines) + "</div>", unsafe_allow_html=True)
+def insight(lines=None, where=None):
+    """「結論」框：where 是 section() 回傳的空位，結論就會出現在圖的上面"""
+    (where or st).markdown('<div class="insight"><span class="insight-k">結論</span>'
+                           + "<br>".join(lines or []) + "</div>", unsafe_allow_html=True)
 
 
 if PAGE == "冠軍密碼":
@@ -753,7 +805,7 @@ if PAGE == "冠軍密碼":
                        f"共 {len(CH)} 位冠軍）；這一頁只受上方「球季範圍」影響。")
 
             # ===== Q1 =====
-            section("Q1　奪冠的最佳因素是什麼？",
+            q1_slot = section("Q1　奪冠的最佳因素是什麼？",
                     "每個點是一位冠軍在該項指標的聯盟排名（1 = 最好）；◆ 是中位數；越集中在左邊，越是冠軍的共同點")
             summ = []
             for label, col, hb, kind in FACTORS:
@@ -791,14 +843,14 @@ if PAGE == "冠軍密碼":
                               "<br>排聯盟前 5 的冠軍：%{customdata[1]:.0%}<extra></extra>"))
             for i, f in summ.iterrows():
                 fig.add_annotation(x=31.2, y=n_f - 1 - i, xanchor="left", showarrow=False,
-                                   text=f"前5 {f['top5']:.0%}", font=dict(size=11, color=INK_2))
-            fig.update_xaxes(title="聯盟排名（1 = 最好，30 = 最差）", range=[0.3, 34.5],
+                                   text=f"{f['top5']:.0%} 的冠軍進前 5", font=dict(size=11, color=INK_2))
+            fig.update_xaxes(title="聯盟排名（1 = 最好，30 = 最差）", range=[0.3, 38],
                              tickvals=[1, 5, 10, 15, 20, 25, 30])
             fig.update_yaxes(tickvals=list(range(n_f)), ticktext=list(summ["label"][::-1]),
                              showgrid=False, range=[-0.6, n_f - 0.2])
             st.plotly_chart(style(fig, 90 + 46 * n_f), width="stretch")
             best, worst = summ.iloc[0], summ.iloc[-1]
-            insight([
+            insight(where=q1_slot, lines=[
                 f"<b>最一致的因素：{best['label']}</b>：{int(best['n'])} 位冠軍的排名中位數是第 {best['median']:.0f} 名，"
                 f"{best['top5']:.0%} 排在聯盟前 5。",
                 f"<b>第二、三名：</b>{summ.iloc[1]['label']}（中位數第 {summ.iloc[1]['median']:.0f} 名）、"
@@ -808,7 +860,7 @@ if PAGE == "冠軍密碼":
             st.divider()
 
             # ===== Q2 =====
-            section("Q2　三分球時代是否造就了近年的冠軍？",
+            q2_slot = section("Q2　三分球時代是否造就了近年的冠軍？",
                     "灰線是聯盟平均，淡紫色帶是 30 隊的最低到最高，★ 是當季冠軍；要看的是冠軍「相對於同季聯盟」的位置")
             q2_opts = {"三分出手比例": ("tpar", "pct"), "三分命中率": ("fg3_pct", "pct"),
                        "場均三分出手": ("fg3a_pg", "num1")}
@@ -854,7 +906,7 @@ if PAGE == "冠軍密碼":
             st.plotly_chart(style(fig, 260), width="stretch")
             above = int((diff > 0).sum())
             recent = diff[diff.index >= RECENT]
-            insight([
+            insight(where=q2_slot, lines=[
                 f"<b>聯盟趨勢：</b>{q2_name}從 {q_seasons[0]} 的 {show(avg.iloc[0], q2_kind)} "
                 f"變成 {q_seasons[-1]} 的 {show(avg.iloc[-1], q2_kind)}。",
                 f"<b>冠軍 vs 聯盟：</b>{len(diff)} 位冠軍中有 {above} 位高於當季聯盟平均"
@@ -863,7 +915,7 @@ if PAGE == "冠軍密碼":
             st.divider()
 
             # ===== Q3 =====
-            section("Q3　為什麼這幾年冠軍球隊都不一樣？",
+            q3_slot = section("Q3　為什麼這幾年冠軍球隊都不一樣？",
                     "假設一：球隊實力差距變小。用 30 隊的標準差衡量：數值越小，代表強弱越接近")
             q3_opts = {"淨效率": ("net_rating", ".1f"), "勝率": ("w_pct", ".1%")}
             q3_name = seg("用哪個指標衡量實力", list(q3_opts), "q3")
@@ -898,7 +950,7 @@ if PAGE == "冠軍密碼":
                 k = int((ch_recent["rk_net_rating"] == 1).sum())
                 lines.append(f"<b>最強的隊不一定奪冠：</b>2019 年後 {len(ch_recent)} 位冠軍中，"
                              f"只有 {k} 位是例行賽淨效率第 1 名。")
-            insight(lines)
+            insight(lines, where=q3_slot)
 
             section("假設二：每支冠軍的打法都不同",
                     "近年冠軍在各項打法的聯盟排名；顏色越深代表排名越前面。節奏第 1 = 最快，失誤少第 1 = 失誤最少")
@@ -1015,7 +1067,8 @@ if PAGE == "投籃分布":
     else:
         shot_seasons = [s for s in ALL_SEASONS if s >= SHOT_START][::-1]
         # 球隊按鈕放在獨立一整排，8 隊才排得下
-        sh_team = pills("球隊", ALL_TEAMS, "sh_team", default=ALL_TEAMS[0], format_func=team_label)
+        sh_team = pills("球隊（投籃位置資料只有八支冠軍隊）", ALL_TEAMS, "sh_team", default=ALL_TEAMS[0],
+                        format_func=team_label)
         c2, c3 = st.columns([3, 2])
         sh_tid = int(team_raw[team_raw["abbreviation"] == sh_team]["team_id"].iloc[0])
         champ_s = [s for s in shot_seasons if (s, sh_team) in CHAMP_SET]
@@ -1112,6 +1165,7 @@ if PAGE == "投籃分布":
                 return f"出手 {n:,} 次｜命中率 {fg:.1%}｜三分出手佔 {three:.0%}"
 
             # 「另一季」＋「每一次出手」：兩季的球場圖左右並排，一眼比較
+            shot_slot = st.container()   # 結論放在圖的上面（先讀結論，再看圖）
             two_up = view == "每一次出手" and vs == "另一季" and not zb.empty
             if two_up:
                 ca, cb = st.columns(2, gap="large")
@@ -1216,7 +1270,7 @@ if PAGE == "投籃分布":
                                  f"<b>最弱區：</b>{worst['name']}（{worst['d'] * 100:+.1f}）。")
             lines.append(f"<b>為什麼看「每次出手得分」：</b>中距離就算投 45%，每次也只值 0.9 分；"
                          f"三分只要投 35% 就值 1.05 分。這就是球隊捨棄中距離的數學理由。")
-            insight(lines)
+            insight(lines, where=shot_slot)
 
             # ---- 逐季趨勢（需要 shot_zone_team 檢視表）----
             st.divider()
@@ -1282,7 +1336,7 @@ if PAGE == "投籃分布":
 
             # ---- 多季對照：一眼看出出手選擇與命中區的變化 ----
             st.divider()
-            section(f"{who} 多季對照：出手選擇與命中區有沒有改變？",
+            mv_slot = section(f"{who} 多季對照：出手選擇與命中區有沒有改變？",
                     "問題：奪冠那幾季的出手位置和準度，跟其他球季比起來有沒有明顯轉變？　"
                     "讀法：橫著看一列（同一區）顏色有沒有變深變淺；★ 是奪冠球季")
             if zt is None or zt.empty:
@@ -1391,7 +1445,7 @@ if PAGE == "投籃分布":
                                          f"（{pct_pv.loc[k].idxmin()}）到 {pct_pv.loc[k].max():.0%}"
                                          f"（{pct_pv.loc[k].idxmax()}）。")
                         lines.append("接著問「為什麼」：那一季換了教練、隊友，還是受傷？這就是從數據走到故事的一步。")
-                        insight(lines)
+                        insight(lines, where=mv_slot)
 
                     # 小球場並排：選幾季放在一起看
                     champ_cols = [s for s, lab in zip(seasons_mv, xlab) if "★" in lab]
@@ -1524,13 +1578,12 @@ if PAGE == "戰術使用":
         # 戰術數據有全聯盟 30 隊：預設列出冠軍隊（＋已載入的球隊），想看別隊可以切到「全聯盟 30 隊」
         abbr2id = {v: k for k, v in id2abbr.items()}
         pt_abbrs = {id2abbr[t] for t in PT["team_id"].unique() if t in id2abbr}
-        scope = seg("球隊範圍", ["冠軍隊與已載入的球隊", "全聯盟 30 隊"], "pl_scope")
-        if scope == "全聯盟 30 隊":
-            team_opts = ALL_TEAMS + sorted(a for a in pt_abbrs if a not in ALL_TEAMS)
-        else:
-            team_opts = ALL_TEAMS + [a for a in EXTRA_TEAMS if a in pt_abbrs]
-        # 球隊按鈕放在獨立一整排（擠在窄欄裡會被切掉、只看得到幾隊）
-        pl_team = pills("球隊", team_opts, f"pl_team_{scope}", default=team_opts[0], format_func=team_label)
+        pt_s = sorted(PT["season"].unique())
+        pc, po = split_teams(sorted(pt_abbrs), pt_s[0], pt_s[-1])
+        po = sorted(po, key=lambda a_: (a_ not in EXTRA_TEAMS, a_))   # 已載入球員數據的球隊排前面
+        pl_team = team_picker_one(pc, po, "pl_team",
+                                  f"奪冠球隊（{pt_s[0]}～{pt_s[-1]} 拿過冠軍）",
+                                  f"其他球隊（戰術數據有全聯盟 30 隊）")
         c2, c3, c4 = st.columns(3)
         pl_tid = int(abbr2id[pl_team])
         pl_seasons = sorted(PT[PT["team_id"] == pl_tid]["season"].unique())[::-1]
@@ -1565,6 +1618,7 @@ if PAGE == "戰術使用":
             star = "★" if (pl_season, pl_team) in CHAMP_SET else ""
             who = f"{pl_season} {ALL_ZH.get(pl_team, pl_team)}{star}"
 
+            pl_slot = st.container()   # 結論放在圖的上面（先讀結論，再看圖）
             left, right = st.columns([5, 4], gap="large")
             with left:
                 section(f"{who} 戰術地圖（{side_zh}）",
@@ -1620,7 +1674,7 @@ if PAGE == "戰術使用":
                 top3 = "、".join(main.head(3)["name"])
                 best = main.sort_values("d_ppp", ascending=False).iloc[0]
                 worst = main.sort_values("d_ppp").iloc[0]
-                insight([
+                insight(where=pl_slot, lines=[
                     f"<b>{who}</b> {side_zh}端最常{'用' if is_off else '面對'}的三種戰術：{top3}。",
                     f"最大優勢：<b>{best['name']}</b>，每回合比聯盟{'多得' if is_off else '少失'} "
                     f"{best['d_ppp']:.2f} 分（聯盟第 {best['rk_ppp']:.0f} 名）。",
@@ -1798,7 +1852,7 @@ if PAGE == "戰術使用":
         # ===== 奪冠方程式 =====
         st.write("")
         st.divider()
-        section("奪冠方程式：哪些戰術和贏球最有關？",
+        eq_slot = section("奪冠方程式：哪些戰術和贏球最有關？",
                 "用全聯盟 30 隊、每一季的例行賽：每種戰術的「效率」和「使用率」，各自和球隊勝率的相關係數。"
                 "長條越長（越往右），代表這件事做得好的隊伍越會贏")
         if win.empty:
@@ -1841,7 +1895,7 @@ if PAGE == "戰術使用":
                 st.plotly_chart(fig, width="stretch")
                 top = cs.sort_values("r_eff", ascending=False).head(3)
                 use_stronger = (cs["r_use"].abs() > cs["r_eff"]).sum()
-                insight([
+                insight(where=eq_slot, lines=[
                     f"{side_zh}端和勝率最有關的三種戰術效率：<b>{'、'.join(PLAY_ZH.get(p, p) for p in top['play_type'])}</b>"
                     f"（相關係數 {'、'.join(format(v, '+.2f') for v in top['r_eff'])}）。",
                     f"{len(cs)} 種戰術中，有 {use_stronger} 種是「用得多」比「打得好」更和勝率有關。"
@@ -1852,7 +1906,7 @@ if PAGE == "戰術使用":
                 ])
 
                 # ---- 方程式分數：用上面的相關係數當權重，替每支球隊打分數，看冠軍會不會排在前面 ----
-                section("檢驗方程式：用這個公式幫每隊打分數，冠軍會排第幾？",
+                chk_slot = section("檢驗方程式：用這個公式幫每隊打分數，冠軍會排第幾？",
                         "方程式分數＝把進攻、防守各戰術的效率換成「比同季聯盟好多少」（標準分數），"
                         "再用上圖的效率相關係數當權重加權平均；只用相關係數大於 0 的戰術")
                 wts = corr.set_index(["side", "play_type"])["r_eff"].clip(lower=0)
@@ -1880,7 +1934,7 @@ if PAGE == "戰術使用":
                     top3 = int((chs["rk_score"] <= 3).sum())
                     top3_win = int((chs["rk_win"] <= 3).sum())
                     r_all = sc["score"].corr(sc["win_pct"])
-                    insight([
+                    insight(where=chk_slot, lines=[
                         f"{len(chs)} 位冠軍裡，有 <b>{top3}</b> 位的方程式分數在當季前 3 名"
                         f"（對照：例行賽勝率前 3 名的有 {top3_win} 位）。",
                         f"全部球隊的方程式分數和勝率相關 {r_all:+.2f}。",
@@ -1925,9 +1979,66 @@ if PAGE == "戰術使用":
                            + "看看冠軍的星星，是不是都在右上角（防守是左上角）？")
 
 
+# ---------- 自動結論：用資料算出一句話，放在圖的上面 ----------
+def _diff_txt(v, f):
+    return f"{v * 100:+.1f} 個百分點" if "%" in f else f"{v:+.2f}"
+
+
+def trend_findings(ts, col, f, name):
+    """球季趨勢：奪冠球季和其他球季差多少、奪冠那季在所選球隊裡排第幾、整體趨勢"""
+    out = []
+    d = ts.dropna(subset=[col])
+    if d.empty:
+        return ["這個條件沒有資料。"]
+    ch, ot = d[d["champion"]][col], d[~d["champion"]][col]
+    if len(ch) and len(ot):
+        out.append(f"<b>奪冠球季</b>的{name}平均 {fmt(ch.mean(), f)}，其他球季平均 {fmt(ot.mean(), f)}，"
+                   f"差 {_diff_txt(ch.mean() - ot.mean(), f)}。")
+        d = d.assign(rk=d.groupby("season")[col].rank(ascending=False, method="min"))
+        c = d[d["champion"]]
+        out.append(f"{len(c)} 個奪冠球季中，有 <b>{int((c['rk'] == 1).sum())}</b> 個是當季所選球隊裡{name}最高的。")
+    by = d.groupby("season")[col].mean()
+    if len(by) >= 2:
+        out.append(f"所選球隊的平均從 {by.index[0]} 的 {fmt(by.iloc[0], f)} 變成 {by.index[-1]} 的 {fmt(by.iloc[-1], f)}。")
+    return out
+
+
+def heat_findings(pv, f, name):
+    """熱力圖：最高與最低的格子、奪冠球季是不是當季最高"""
+    st_ = pv.stack().dropna()
+    if st_.empty:
+        return ["這個條件沒有資料。"]
+    (ha, hs), (la, ls) = st_.idxmax(), st_.idxmin()
+    out = [f"最高：<b>{team_label(ha)} {hs}</b>（{fmt(st_.max(), f)}）；最低：{team_label(la)} {ls}（{fmt(st_.min(), f)}）。"]
+    top = pv.idxmax(axis=0).dropna()
+    champ_cols = [(s_, a_) for s_, a_ in CHAMP_SET if s_ in pv.columns and a_ in pv.index]
+    if champ_cols:
+        hit = sum(1 for s_, a_ in champ_cols if top.get(s_) == a_)
+        out.append(f"表上 {len(champ_cols)} 個奪冠球季（★）中，有 <b>{hit}</b> 個是那一季這一欄顏色最深的。"
+                   + ("所以這個指標和奪冠很有關。" if hit >= len(champ_cols) * 0.6 else "所以光看這個指標，猜不到誰會奪冠。"))
+    return out
+
+
+def champ_findings(cr, ts, col, f, name):
+    """冠軍球季比較：幾位冠軍在奪冠那季比自己其他球季好"""
+    diffs = []
+    for _, r in cr.iterrows():
+        o = ts[(ts["abbreviation"] == r["abbreviation"]) & (~ts["champion"])][col].mean()
+        if pd.notna(o) and pd.notna(r[col]):
+            diffs.append((r["label"], r[col] - o))
+    if not diffs:
+        return ["範圍內沒有可以比較的球季。"]
+    up = sum(1 for _, v in diffs if v > 0)
+    big = max(diffs, key=lambda x: x[1])
+    return [f"{len(diffs)} 個奪冠球季中，有 <b>{up}</b> 個的{name}比同隊其他球季高。",
+            f"差距最大：<b>{big[0]}</b>（{_diff_txt(big[1], f)}）。"
+            + ("奪冠那季通常是這支球隊的高峰。" if up >= len(diffs) * 0.7 else "奪冠不一定是這項數字的高峰。")]
+
+
 # ---------- 1. 球季趨勢 ----------
 if PAGE == "球季趨勢":
-    section(f"{metric_name}：各隊逐季變化", "★ 是該隊奪冠的球季；選擇聚焦球隊，其他球隊會變成灰色背景，線條就不會互相干擾")
+    tr_slot = section(f"{metric_name}：各隊逐季變化", "★ 是該隊奪冠的球季；選擇聚焦球隊，其他球隊會變成灰色背景，線條就不會互相干擾")
+    insight(trend_findings(team_season, metric, mfmt, metric_name), where=tr_slot)
     focus = pills("聚焦球隊（可多選，不選＝全部上色）", teams_sel, "focus", default=[], multi=True,
                   format_func=team_label)
     fig = go.Figure()
@@ -1966,9 +2077,10 @@ if PAGE == "球季趨勢":
 
 # ---------- 2. 球隊 × 球季 熱力圖 ----------
 if PAGE == "球隊 × 球季":
-    section(f"{metric_name}：球隊 × 球季交叉表", "顏色越深數值越高；★ 是奪冠球季；空白代表該季沒有這類比賽")
+    hm_slot = section(f"{metric_name}：球隊 × 球季交叉表", "顏色越深數值越高；★ 是奪冠球季；空白代表該季沒有這類比賽")
     pivot = team_season.pivot(index="abbreviation", columns="season", values=metric)
     pivot = pivot.reindex(index=[a for a in teams_sel if a in pivot.index], columns=seasons)
+    insight(heat_findings(pivot, mfmt, metric_name), where=hm_slot)
     z = pivot.values.astype(float)
     fig = go.Figure(go.Heatmap(
         z=z, x=pivot.columns, y=[team_label(a) for a in pivot.index],
@@ -2004,6 +2116,7 @@ if PAGE == "冠軍球季比較":
     else:
         champ_rows["label"] = champ_rows["season"] + " " + champ_rows["abbreviation"].map(team_label)
         champ_rows = champ_rows.sort_values("season")
+        insight(champ_findings(champ_rows, team_season, metric, mfmt, metric_name))
         left, right = st.columns([3, 2], gap="large")
         with left:
             section(f"奪冠那一季的{metric_name}", "比較每支冠軍隊在奪冠球季的表現")
