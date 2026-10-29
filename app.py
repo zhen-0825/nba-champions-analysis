@@ -185,6 +185,7 @@ hr { border-color: var(--line) !important; }
 /* ===== 精簡表格：只有橫向細線、數字靠右對齊 ===== */
 .ntable { width: 100%; border-collapse: collapse; font-size: 0.9rem; margin: 4px 0 8px 0; background: var(--surface);
           border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.ntable th, .ntable td { white-space: nowrap; }
 .ntable th { text-align: left; font-weight: 500; font-size: 0.78rem; color: var(--ink-2);
              padding: 9px 12px; border-bottom: 1px solid #d9d3e6; background: #faf9fc; }
 .ntable td { padding: 9px 12px; color: var(--ink); border-bottom: 1px solid #f0edf5; }
@@ -310,8 +311,8 @@ def nice_table(df, num_cols=(), signed_cols=(), dot_col=None, colors=None, bars=
                 v = f'<div class="barcell"><span class="bar" style="width:{w:.0f}px"></span><span>{v}</span></div>'
             cells.append(f'<td class="{cls}">{v}</td>')
         body.append("<tr>" + "".join(cells) + "</tr>")
-    st.markdown(f'<table class="ntable"><thead><tr>{head}</tr></thead><tbody>{"".join(body)}</tbody></table>',
-                unsafe_allow_html=True)
+    st.markdown(f'<div style="overflow-x:auto"><table class="ntable"><thead><tr>{head}</tr></thead>'
+                f'<tbody>{"".join(body)}</tbody></table></div>', unsafe_allow_html=True)
 
 
 def champion_bands(fig, seasons, team):
@@ -1520,10 +1521,18 @@ if PAGE == "戰術使用":
         if not league.empty:
             id2abbr.update(dict(zip(league["team_id"], league["abbreviation"])))
 
-        # 球隊按鈕放在獨立一整排，8 隊才排得下（擠在窄欄裡會被切掉、只看得到幾隊）
-        pl_team = pills("球隊", ALL_TEAMS, "pl_team", default=ALL_TEAMS[0], format_func=team_label)
+        # 戰術數據有全聯盟 30 隊：預設列出冠軍隊（＋已載入的球隊），想看別隊可以切到「全聯盟 30 隊」
+        abbr2id = {v: k for k, v in id2abbr.items()}
+        pt_abbrs = {id2abbr[t] for t in PT["team_id"].unique() if t in id2abbr}
+        scope = seg("球隊範圍", ["冠軍隊與已載入的球隊", "全聯盟 30 隊"], "pl_scope")
+        if scope == "全聯盟 30 隊":
+            team_opts = ALL_TEAMS + sorted(a for a in pt_abbrs if a not in ALL_TEAMS)
+        else:
+            team_opts = ALL_TEAMS + [a for a in EXTRA_TEAMS if a in pt_abbrs]
+        # 球隊按鈕放在獨立一整排（擠在窄欄裡會被切掉、只看得到幾隊）
+        pl_team = pills("球隊", team_opts, f"pl_team_{scope}", default=team_opts[0], format_func=team_label)
         c2, c3, c4 = st.columns(3)
-        pl_tid = int(team_raw[team_raw["abbreviation"] == pl_team]["team_id"].iloc[0])
+        pl_tid = int(abbr2id[pl_team])
         pl_seasons = sorted(PT[PT["team_id"] == pl_tid]["season"].unique())[::-1]
         if not pl_seasons:   # 這隊完全沒有戰術數據：仍列出所有球季，下面會顯示「沒有資料」
             pl_seasons = sorted(PT["season"].unique())[::-1]
@@ -1554,7 +1563,7 @@ if PAGE == "戰術使用":
             cur["d_ppp"] = (cur["ppp"] - cur["lg_ppp"]) * (1 if is_off else -1)
             cur = cur.sort_values("poss_pct", ascending=False)
             star = "★" if (pl_season, pl_team) in CHAMP_SET else ""
-            who = f"{pl_season} {TEAM_ZH.get(pl_team, pl_team)}{star}"
+            who = f"{pl_season} {ALL_ZH.get(pl_team, pl_team)}{star}"
 
             left, right = st.columns([5, 4], gap="large")
             with left:
@@ -1667,7 +1676,7 @@ if PAGE == "戰術使用":
 
             # ===== 奪冠前後：某一種戰術的逐季變化 =====
             st.write("")
-            section(f"{TEAM_ZH.get(pl_team, pl_team)}的某一種戰術，逐季怎麼變？",
+            section(f"{ALL_ZH.get(pl_team, pl_team)}的某一種戰術，逐季怎麼變？",
                     "紫色直條是奪冠球季；看看奪冠那季是突然變強，還是一路累積上來")
             opts = [p for p in PLAY_ORDER if p != "Misc" and p in set(PT["play_type"])]
             default_p = cur[cur["play_type"] != "Misc"]["play_type"].iloc[0] if (cur["play_type"] != "Misc").any() else opts[0]
@@ -1690,7 +1699,7 @@ if PAGE == "戰術使用":
                         fig = go.Figure()
                         fig.add_trace(go.Scatter(x=tr_seasons, y=tr[lg], name="聯盟平均", mode="lines",
                                                  line=dict(color=MUTED, width=2, dash="dot")))
-                        fig.add_trace(go.Scatter(x=tr_seasons, y=tr[val], name=TEAM_ZH.get(pl_team, pl_team),
+                        fig.add_trace(go.Scatter(x=tr_seasons, y=tr[val], name=ALL_ZH.get(pl_team, pl_team),
                                                  mode="lines+markers", line=dict(color=color, width=3),
                                                  marker=dict(size=[11 if f else 7 for f in few],
                                                              symbol=["circle-open" if f else "circle" for f in few],
