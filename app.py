@@ -104,7 +104,7 @@ st.markdown("""
 }
 html, body, [class*="css"], .stMarkdown, .stText { font-family: 'Noto Sans TC', 'Microsoft JhengHei', sans-serif; }
 .stApp { background: var(--bg); }
-.block-container { padding-top: 1.6rem; padding-bottom: 4rem; max-width: 1360px; }
+.block-container { padding-top: 3.2rem; padding-bottom: 4rem; max-width: 1360px; }   /* 上方留空間，麵包屑才不會被頂端工具列蓋住 */
 
 /* ===== 左側：品牌黑底選單（參考 YouTube 的左側導覽）===== */
 section[data-testid="stSidebar"] { background: var(--night); border-right: 1px solid #241b38; }
@@ -120,6 +120,10 @@ section[data-testid="stSidebar"] hr { border-color: #241b38 !important; }
 section[data-testid="stSidebar"] .stButton > button {
   justify-content: flex-start; text-align: left; border-radius: 10px; padding: 0.5rem 0.9rem;
   border: 1px solid transparent; background: transparent; box-shadow: none; }
+section[data-testid="stSidebar"] .stButton > button > div,
+section[data-testid="stSidebar"] .stButton > button [data-testid="stMarkdownContainer"] {
+  justify-content: flex-start !important; text-align: left !important; width: 100%; }
+section[data-testid="stSidebar"] .stButton > button p { text-align: left !important; font-size: 0.95rem; }
 section[data-testid="stSidebar"] .stButton > button:hover { background: #1c1529; border-color: transparent; }
 section[data-testid="stSidebar"] [data-testid="stBaseButton-primary"] {
   background: #2a1d4a !important; border-left: 3px solid #a78bfa !important; }
@@ -139,6 +143,13 @@ section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] { gap: 0.2rem; 
 .pagehead .crumb { font-size: 0.78rem; color: var(--muted); }
 .pagehead h2 { font-weight: 900; color: var(--ink); font-size: 1.7rem; margin: 2px 0 2px 0; padding: 0; }
 .pagehead .pq { color: var(--brand); font-size: 1rem; font-weight: 500; }
+
+/* ===== 問題／假設小卡 ===== */
+.hypo { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 10px 16px;
+        margin: 4px 0 14px 0; font-size: 0.9rem; color: var(--ink); line-height: 1.9; }
+.hypo-k { display: inline-block; font-size: 0.74rem; font-weight: 700; color: #ffffff; background: var(--night);
+          border-radius: 4px; padding: 0 7px; margin-right: 10px; line-height: 1.7; }
+.hypo div:nth-child(2) .hypo-k { background: var(--brand); }
 
 /* ===== 數字卡 ===== */
 .kpi { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; height: 100%; }
@@ -205,6 +216,12 @@ def kpi(col, label, value, sub=""):
     col.markdown(f'<div class="kpi"><div class="kpi-label">{label}</div>'
                  f'<div class="kpi-value">{value}</div><div class="kpi-sub">{sub}</div></div>',
                  unsafe_allow_html=True)
+
+
+def hypothesis(question, guess):
+    """每頁開頭的小卡：這頁要驗證的問題與假設（老師要的「先提出假設」）"""
+    st.markdown(f'<div class="hypo"><div><span class="hypo-k">問題</span>{question}</div>'
+                f'<div><span class="hypo-k">假設</span>{guess}</div></div>', unsafe_allow_html=True)
 
 
 def section(title, sub=""):
@@ -988,18 +1005,17 @@ def shots_to_zone_rows(s):
 
 
 if PAGE == "投籃分布":
-    section("冠軍從哪裡出手？",
-            "問題：奪冠那一季的出手位置，和聯盟平均、和自己其他球季有什麼不同？　"
-            "假設：冠軍會把出手集中在「禁區籃下＋三分」這兩個每次出手得分最高的地方，少投中距離")
+    hypothesis("奪冠那一季的出手位置，和聯盟平均、和自己其他球季有什麼不同？",
+               "冠軍會把出手集中在「禁區籃下＋三分」這兩個每次出手得分最高的地方，少投中距離。")
     status = table_status("shots")
     if status != "ok":
         st.info("尚未載入資料，請執行 python load_extra.py --only shots"
                 + ("（資料表還不存在：請先到 Supabase SQL Editor 執行 schema_extra.sql）" if status == "missing" else ""))
     else:
         shot_seasons = [s for s in ALL_SEASONS if s >= SHOT_START][::-1]
-        c1, c2, c3 = st.columns([3, 2, 2])
-        with c1:
-            sh_team = pills("球隊", ALL_TEAMS, "sh_team", default=ALL_TEAMS[0], format_func=team_label)
+        # 球隊按鈕放在獨立一整排，8 隊才排得下
+        sh_team = pills("球隊", ALL_TEAMS, "sh_team", default=ALL_TEAMS[0], format_func=team_label)
+        c2, c3 = st.columns([3, 2])
         sh_tid = int(team_raw[team_raw["abbreviation"] == sh_team]["team_id"].iloc[0])
         champ_s = [s for s in shot_seasons if (s, sh_team) in CHAMP_SET]
         with c2:
@@ -1488,9 +1504,8 @@ def playtype_league(pt):
 
 
 if PAGE == "戰術使用":
-    section("冠軍靠什麼戰術得分？",
-            "問題：冠軍隊的進攻是「某種戰術用得特別多」，還是「同樣的戰術打得特別有效率」？　"
-            "假設：冠軍的戰術比例和聯盟差不多，真正拉開差距的是每回合得分（效率）")
+    hypothesis("冠軍隊的進攻是「某種戰術用得特別多」，還是「同樣的戰術打得特別有效率」？",
+               "冠軍的戰術比例和聯盟差不多，真正拉開差距的是每回合得分（效率）。")
     pt_status = table_status("playtypes_team")
     pt_raw = load_playtypes_team() if pt_status == "ok" else pd.DataFrame()
     if pt_raw.empty:
