@@ -549,6 +549,8 @@ PAGES = [
      "半場球場圖：奪冠那季的出手位置，和聯盟平均、和自己其他球季比較。", set()),
     ("冠軍故事", "戰術使用", "冠軍靠什麼戰術得分？",
      "戰術地圖、八位冠軍的共同點、全聯盟各隊比較與奪冠方程式。", set()),
+    ("冠軍故事", "籤運與傷兵", "冠軍是不是靠運氣？",
+     "冠軍的季後賽對手比一般季後賽球隊弱嗎？對手主力缺陣的比例有沒有特別高？", set()),
     ("自由探索", "球季趨勢", "各隊一路怎麼變化？",
      "選一個指標，看各隊 20 季的折線；可聚焦幾支球隊，其他變灰。", {"team", "season", "type", "metric"}),
     ("自由探索", "球隊 × 球季", "哪隊在哪季特別突出？",
@@ -2053,6 +2055,211 @@ if PAGE == "戰術使用":
                            + ("進攻端：點越往右上排，代表打得越好越會贏。" if is_off else
                               "防守端：失分越少越好，所以點應該往左上排。")
                            + "看看冠軍的星星，是不是都在右上角（防守是左上角）？")
+
+
+# ---------- 籤運與傷兵：冠軍是不是靠運氣？ ----------
+OLD_ABBR = {"NJN": "BKN", "SEA": "OKC", "NOH": "NOP", "NOK": "NOP", "CHH": "CHA", "VAN": "MEM"}   # 搬家、改名前的縮寫
+ROUND_ZH = ["首輪", "次輪", "分區決賽", "總冠軍賽"]
+
+
+@st.cache_data(ttl=3600, show_spinner="讀取季後賽賽程中…")
+def load_playoff_games(team_id):
+    """某隊所有季後賽比賽：哪一天、對手是誰（從 matchup 文字拆出來）、輸贏"""
+    try:
+        rows = (get_client().table("team_games")
+                .select("game_id,matchup,wl,games!inner(game_date,season,season_type)")
+                .eq("team_id", int(team_id)).eq("games.season_type", "Playoffs")
+                .range(0, 999).execute().data)
+    except Exception:
+        return pd.DataFrame()
+    if not rows:
+        return pd.DataFrame()
+    df = pd.json_normalize(rows).rename(columns=lambda c: c.replace("games.", ""))
+    df = df[df["season_type"] == "Playoffs"]
+    # 「GSW vs. BOS」或「GSW @ BOS」：最後一段就是對手
+    df["opp"] = df["matchup"].str.split().str[-1].map(lambda a: OLD_ABBR.get(a, a))
+    return df
+
+
+@st.cache_data(ttl=3600)
+def load_game_players(game_ids, team_id):
+    """這幾場比賽，某隊有上場的球員（有出賽紀錄＝有上場；沒有紀錄＝沒上場）"""
+    if not game_ids:
+        return pd.DataFrame()
+    try:
+        rows = (get_client().table("player_game_stats").select("game_id,player_id,min")
+                .in_("game_id", list(game_ids)).eq("team_id", int(team_id))
+                .range(0, 4999).execute().data)
+    except Exception:
+        return pd.DataFrame()
+    return pd.DataFrame(rows)
+
+
+def core_players(abbr, season, n=3):
+    """一支球隊當季例行賽的「主力」：出賽至少 20 場、場均得分最高的 n 人"""
+    d = player_raw[(player_raw["abbreviation"] == abbr) & (player_raw["season"] == season)
+                   & (player_raw["season_type"] == "Regular Season")].copy()
+    if d.empty:
+        return pd.DataFrame()
+    for c in ["gp", "pts", "min"]:
+        d[c] = pd.to_numeric(d[c], errors="coerce")
+    d = d[d["gp"] >= 20]
+    d["ppg"] = d["pts"] / d["gp"]
+    return d.sort_values("ppg", ascending=False).head(n)[["player_id", "player_name", "ppg", "gp"]]
+
+
+def missing_core(abbr, team_id, season, game_ids):
+    """主力缺陣：這幾場比賽中，主力「沒有出賽紀錄」的人次。回傳（缺陣人次, 可能人次, 缺陣名單）"""
+    core = core_players(abbr, season)
+    if core.empty:
+        return None
+    played = load_game_players(tuple(game_ids), team_id)
+    if played.empty:
+        return None
+    miss, names = 0, []
+    for _, p in core.iterrows():
+        k = sum(1 for g in game_ids if not ((played["game_id"] == g) & (played["player_id"] == p["player_id"])).any())
+        miss += k
+        if k:
+            names.append(f"{p['player_name']}（缺 {k} 場）")
+    return miss, len(core) * len(game_ids), names
+
+
+if PAGE == "籤運與傷兵":
+    hypothesis("冠軍是不是「籤運比較好」（季後賽遇到的對手比較弱），或是對手主力受傷缺陣，才拿到冠軍？",
+               "冠軍的季後賽對手，例行賽實力和其他季後賽球隊差不多；對手主力缺陣的比例也不會特別高。"
+               "也就是說，冠軍主要靠實力，不是靠運氣。")
+    if league.empty:
+        st.info("需要全聯盟數據才能比較對手強弱，請先執行：python load_to_supabase.py --only league")
+    else:
+        L = league[league["season_type"] == "Regular Season"].copy()
+        for c in ["net_rating", "w", "gp"]:
+            L[c] = pd.to_numeric(L[c], errors="coerce")
+        L["rk_net"] = L.groupby("season")["net_rating"].rank(ascending=False, method="min")
+        Lk = L.set_index(["season", "abbreviation"])
+        playoff_teams = league[league["season_type"] == "Playoffs"][["season", "abbreviation"]]
+        abbr2tid = dict(zip(league["abbreviation"], league["team_id"]))
+
+        # 每一位冠軍的季後賽路線
+        loaded = set(team_raw["abbreviation"])
+        series_rows = []
+        for s_, a_ in sorted(CHAMP_SET):
+            if a_ not in loaded or s_ not in set(L["season"]):
+                continue
+            pg = load_playoff_games(abbr2tid.get(a_, 0))
+            if pg.empty:
+                continue
+            pg = pg[pg["season"] == s_]
+            if pg.empty:
+                continue
+            first = pg.groupby("opp")["game_date"].min().sort_values()
+            for rnd, (opp, _) in enumerate(first.items()):
+                g = pg[pg["opp"] == opp]
+                o = Lk.loc[(s_, opp)] if (s_, opp) in Lk.index else None
+                series_rows.append({
+                    "season": s_, "champ": a_, "round": rnd, "opp": opp,
+                    "games": len(g), "w": int((g["wl"] == "W").sum()), "l": int((g["wl"] == "L").sum()),
+                    "opp_net": None if o is None else float(o["net_rating"]),
+                    "opp_rk": None if o is None else int(o["rk_net"]),
+                    "game_ids": tuple(g["game_id"]),
+                })
+        S = pd.DataFrame(series_rows)
+        if S.empty:
+            st.info("資料庫裡還沒有冠軍隊的季後賽比賽，請先執行：python load_to_supabase.py --only players")
+        else:
+            # ===== 證據一：籤運（對手強不強）=====
+            path = (S.groupby(["season", "champ"]).agg(opp_net=("opp_net", "mean"), n=("opp", "count"))
+                    .reset_index())
+            # 對照組：同一季所有季後賽球隊（不含冠軍）的平均淨效率＝「隨機抽一隊」的平均強度
+            base = []
+            for s_, a_ in zip(path["season"], path["champ"]):
+                pt_ = playoff_teams[(playoff_teams["season"] == s_) & (playoff_teams["abbreviation"] != a_)]
+                v = L[(L["season"] == s_) & L["abbreviation"].isin(pt_["abbreviation"])]["net_rating"].mean()
+                base.append(v)
+            path["base"] = base
+            path["luck"] = path["opp_net"] - path["base"]   # 負的＝對手比一般季後賽球隊弱＝籤運好
+            path["label"] = path["season"] + " " + path["champ"].map(team_label)
+            path = path.sort_values("season")
+
+            s1 = section("證據一：冠軍的季後賽對手，比一般季後賽球隊弱嗎？",
+                         "每一條是一位冠軍：紫點＝他季後賽遇到的對手，例行賽淨效率平均；灰線＝同一季所有季後賽球隊的平均。"
+                         "紫點在灰線左邊＝對手比較弱（籤運好）")
+            easy = path[path["luck"] < -1.0]
+            hard = path[path["luck"] > 1.0]
+            insight(where=s1, lines=[
+                f"{len(path)} 位冠軍中，<b>{len(easy)}</b> 位的對手明顯比一般季後賽球隊弱（淨效率低 1 分以上），"
+                f"<b>{len(hard)}</b> 位的對手明顯比較強，其他 {len(path) - len(easy) - len(hard)} 位差不多。",
+                (f"籤運最好：<b>{path.loc[path['luck'].idxmin(), 'label']}</b>"
+                 f"（對手平均 {path['opp_net'].min():+.1f}，比一般季後賽球隊低 {abs(path['luck'].min()):.1f}）；"
+                 f"最硬的路：<b>{path.loc[path['luck'].idxmax(), 'label']}</b>（高 {path['luck'].max():.1f}）。")
+                if path["luck"].notna().any() else "對手資料不足。",
+                "讀法：淨效率是「每 100 回合贏對手幾分」，+5 大約是強隊、0 是普通隊。"
+                + ("大多數冠軍的對手和一般季後賽球隊差不多，「籤運好才奪冠」的說法站不太住。"
+                   if len(easy) <= len(path) / 3 else "不少冠軍的對手確實偏弱，籤運可能有幫上忙。"),
+            ])
+            fig = go.Figure()
+            ys = list(path["label"])
+            for _, r in path.iterrows():
+                fig.add_shape(type="line", x0=r["base"], x1=r["opp_net"], y0=r["label"], y1=r["label"],
+                              line=dict(color="#d9d3e6", width=3))
+            fig.add_trace(go.Scatter(x=path["base"], y=ys, mode="markers", name="同季季後賽球隊平均",
+                                     marker=dict(symbol="line-ns", size=16, line=dict(width=3, color="#8f889f")),
+                                     hovertemplate="%{y}<br>季後賽球隊平均 %{x:+.1f}<extra></extra>"))
+            fig.add_trace(go.Scatter(x=path["opp_net"], y=ys, mode="markers", name="冠軍遇到的對手平均",
+                                     marker=dict(size=12, color=[TEAM_COLORS.get(a, ACCENT) for a in path["champ"]],
+                                                 line=dict(width=1.5, color=SURFACE)),
+                                     customdata=path[["luck", "n"]].values,
+                                     hovertemplate="%{y}<br>對手平均 %{x:+.1f}（差 %{customdata[0]:+.1f}，"
+                                                   "共 %{customdata[1]} 輪）<extra></extra>"))
+            fig = style(fig, 90 + 34 * len(path))
+            fig.update_yaxes(autorange="reversed", showgrid=False, type="category")
+            fig.update_xaxes(title="例行賽淨效率（每 100 回合淨勝分）", showgrid=True, gridcolor=GRID,
+                             tickformat="+.0f", zeroline=True, zerolinecolor="#d9d3e6")
+            fig.update_layout(legend=dict(orientation="h", y=1.04, x=0, yanchor="bottom"))
+            st.plotly_chart(fig, width="stretch")
+
+            # ===== 一位冠軍的季後賽路線（逐輪）=====
+            st.write("")
+            opts = list(path["label"])
+            pick = st.selectbox("選一位冠軍，看他每一輪遇到誰", opts[::-1], key="luck_pick")
+            ps, pc = pick.split()[0], pick.split()[1]
+            one = S[(S["season"] == ps) & (S["champ"] == pc)].sort_values("round")
+            s2 = section(f"{pick} 的季後賽路線",
+                         "對手的例行賽淨效率與聯盟排名（1 = 最強）；主力缺陣＝對手例行賽得分前 3 名在這個系列賽沒上場的場次")
+            rows, miss_tot, poss_tot, own_tot, own_poss = [], 0, 0, 0, 0
+            for _, r in one.iterrows():
+                m = missing_core(r["opp"], abbr2tid.get(r["opp"], 0), ps, r["game_ids"])
+                mo = missing_core(pc, abbr2tid.get(pc, 0), ps, r["game_ids"])
+                if m:
+                    miss_tot += m[0]; poss_tot += m[1]
+                if mo:
+                    own_tot += mo[0]; own_poss += mo[1]
+                rows.append({"輪次": ROUND_ZH[r["round"]] if r["round"] < 4 else f"第 {r['round'] + 1} 輪",
+                             "對手": team_label(r["opp"]), "_key": r["opp"],
+                             "系列賽": f"{r['w']} 勝 {r['l']} 敗",
+                             "對手淨效率": "-" if pd.isna(r["opp_net"]) else f"{r['opp_net']:+.1f}",
+                             "聯盟排名": "-" if pd.isna(r["opp_rk"]) else f"第 {int(r['opp_rk'])}",
+                             "對手主力缺陣": "尚未載入對手資料" if m is None else
+                                         ("無" if not m[0] else "、".join(m[2])),
+                             "冠軍自己主力缺陣": "-" if mo is None else ("無" if not mo[0] else "、".join(mo[2]))})
+            lines = []
+            if poss_tot:
+                lines.append(f"對手主力缺陣比例：<b>{miss_tot / poss_tot:.0%}</b>（{miss_tot} / {poss_tot} 人次）；"
+                             f"冠軍自己：{(own_tot / own_poss if own_poss else 0):.0%}。"
+                             + ("對手缺陣明顯比較多，傷兵可能幫了忙。" if own_poss and miss_tot / poss_tot > own_tot / own_poss + 0.10
+                                else "兩邊差不多，看不出是靠對手傷兵。"))
+            else:
+                lines.append("對手的球員逐場數據還沒載入，暫時算不出主力缺陣（每天會自動加入 2 隊，載入後這裡就會出現）。")
+            insight(lines, where=s2)
+            nice_table(pd.DataFrame(rows), num_cols=("對手淨效率", "聯盟排名"), dot_col="對手", colors=TEAM_COLORS)
+
+            with st.expander("資料來源與方法、限制"):
+                st.markdown("""
+- **對手強弱**：對手在同一季**例行賽**的淨效率（league_team_seasons）。對照組是同一季所有打進季後賽的球隊（不含冠軍）的平均，代表「隨便抽到一個季後賽對手」大概多強。
+- **季後賽路線**：從冠軍隊的季後賽比賽（team_games 的 matchup，例如「GSW vs. BOS」）拆出對手，依第一場的日期排出第幾輪。
+- **主力缺陣**：對手例行賽出賽至少 20 場、場均得分前 3 名的球員，在系列賽中「沒有出賽紀錄」的場次。
+- **限制**：資料庫沒有傷病報告，所以「沒上場」可能是受傷、休息、禁賽或教練決定，**不一定是傷兵**；對手的球員數據要等該隊載入後才算得出來；季中交易來的球員算在新球隊。
+""")
 
 
 # ---------- 自動結論：用資料算出一句話，放在圖的上面 ----------
