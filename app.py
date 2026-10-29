@@ -112,9 +112,9 @@ section[data-testid="stSidebar"] * { color: #d9d3ea; }
 section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p { color: #8d86a3 !important; font-size: 0.78rem; }
 section[data-testid="stSidebar"] hr { border-color: #241b38 !important; }
 .logo { display: flex; align-items: center; gap: 12px; margin: 0 0 18px 4px; }
-.logo img { width: 38px; height: 38px; }
-.logo-name { font-size: 1.35rem; font-weight: 900; letter-spacing: 0.02em; line-height: 1.1; }
-.logo-name .z { color: #a78bfa !important; } .logo-name .h { color: #f4f0ff !important; }
+.logo img { width: 42px; height: 42px; }
+.logo-name { font-size: 1.5rem; font-weight: 900; letter-spacing: 0.01em; line-height: 1.05; }
+.logo-name .z { color: #8b5cf6 !important; } .logo-name .h { color: #ffffff !important; }
 .logo-tag { font-size: 0.62rem; letter-spacing: 0.22em; color: #8d86a3 !important; margin-top: 2px; }
 .nav-group { font-size: 0.72rem; letter-spacing: 0.16em; color: #8d86a3 !important; margin: 18px 0 4px 12px; }
 section[data-testid="stSidebar"] .stButton > button {
@@ -502,8 +502,8 @@ P_COLS = ["gp", "min", "pts", "fgm", "fga", "fg3m", "fg3a", "ftm", "fta", "reb",
 # =====================================================================
 # 導覽：左側像 YouTube 一樣是「頁面選單」，篩選條件移到各頁上方
 # =====================================================================
-# ZheN 標誌：黑底圓角方塊裡一個紫色的 Z，下面那一橫做成上升的折線＋一個資料點（原始檔在 docs/logo/）
-LOGO_B64 = "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MCIgaGVpZ2h0PSI0MCIgdmlld0JveD0iMCAwIDQwIDQwIj4gPGRlZnM+IDxsaW5lYXJHcmFkaWVudCBpZD0iemciIHgxPSIwIiB5MT0iMCIgeDI9IjEiIHkyPSIxIj4gPHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjYzRiNWZkIi8+IDxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iIzdjM2FlZCIvPiA8L2xpbmVhckdyYWRpZW50PiA8L2RlZnM+IDxyZWN0IHg9IjAuNSIgeT0iMC41IiB3aWR0aD0iMzkiIGhlaWdodD0iMzkiIHJ4PSIxMCIgZmlsbD0iIzBkMGExNCIgc3Ryb2tlPSIjN2MzYWVkIiBzdHJva2Utb3BhY2l0eT0iMC43Ii8+IDxwYXRoIGQ9Ik0xMSAxMS41IEgyOC41IEwxMS41IDI3LjUgTDE3IDI3LjUgTDIxLjUgMjMuNSBMMjUgMjYgTDI5LjUgMjEiIGZpbGw9Im5vbmUiIHN0cm9rZT0idXJsKCN6ZykiIHN0cm9rZS13aWR0aD0iMyIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+IDxjaXJjbGUgY3g9IjI5LjUiIGN5PSIyMSIgcj0iMi40IiBmaWxsPSIjZjRmMGZmIi8+IDwvc3ZnPg=="
+# ZheN 標誌：黑底方塊裡一個粗體白色 Z，Z 的底邊接著兩根往上長的紫色長條（數據成長），原始檔在 docs/logo/
+LOGO_B64 = "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MCIgaGVpZ2h0PSI0MCIgdmlld0JveD0iMCAwIDQwIDQwIj4gPHJlY3QgeD0iMC43NSIgeT0iMC43NSIgd2lkdGg9IjM4LjUiIGhlaWdodD0iMzguNSIgcng9IjciIGZpbGw9IiMwZDBhMTQiIHN0cm9rZT0iIzdjM2FlZCIgc3Ryb2tlLXdpZHRoPSIxLjUiLz4gPHBvbHlnb24gcG9pbnRzPSI4LDggMzIsOCAzMiwxMy41IDgsMTMuNSIgZmlsbD0iI2ZmZmZmZiIvPiA8cG9seWdvbiBwb2ludHM9IjI1LjUsMTMuNSAzMiwxMy41IDE0LjUsMjcuNSA4LDI3LjUiIGZpbGw9IiNmZmZmZmYiLz4gPHJlY3QgeD0iOCIgeT0iMjcuNSIgd2lkdGg9IjYuNSIgaGVpZ2h0PSI0LjUiIGZpbGw9IiNmZmZmZmYiLz4gPHJlY3QgeD0iMTYuNzUiIHk9IjIyLjUiIHdpZHRoPSI2LjUiIGhlaWdodD0iOS41IiBmaWxsPSIjOGI1Y2Y2Ii8+IDxyZWN0IHg9IjI1LjUiIHk9IjE3IiB3aWR0aD0iNi41IiBoZWlnaHQ9IjE1IiBmaWxsPSIjOGI1Y2Y2Ii8+IDwvc3ZnPg=="
 
 # （群組, 頁面名稱, 這頁回答的問題, 卡片說明, 這頁要用到哪些篩選）
 PAGES = [
