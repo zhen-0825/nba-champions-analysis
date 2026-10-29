@@ -52,6 +52,11 @@ METRICS = {
     "場均助攻": ("apg", ".1f"),
     "助攻失誤比": ("ast_tov", ".2f"),
     "勝率": ("win_pct", ".1%"),
+    "投籃命中率": ("fg_pct", ".1%"),
+    "場均籃板": ("rpg", ".1f"),
+    "場均抄截": ("spg", ".1f"),
+    "場均阻攻": ("bpg", ".1f"),
+    "場均失誤（越少越好）": ("topg", ".1f"),
 }
 # 球員指標
 P_METRICS = {
@@ -503,12 +508,15 @@ def add_metrics(d, games_col="games"):
     d["apg"] = d["ast"] / n
     d["rpg"] = d["reb"] / n
     d["ast_tov"] = d["ast"] / d["tov"].replace(0, pd.NA)
+    for c_, src in [("spg", "stl"), ("bpg", "blk"), ("topg", "tov")]:
+        if src in d.columns:
+            d[c_] = d[src] / n
     if "min" in d.columns:
         d["mpg"] = d["min"] / n
     if "wins" in d.columns:
         d["win_pct"] = d["wins"] / n
     num = ["ts", "fg_pct", "tpar", "fg3_pct", "ppg", "fga_pg", "fg3a_pg", "apg", "rpg",
-           "ast_tov", "mpg", "win_pct", games_col]
+           "ast_tov", "mpg", "win_pct", "spg", "bpg", "topg", games_col]
     for c in [c for c in num if c in d.columns]:
         d[c] = pd.to_numeric(d[c], errors="coerce")
     return d
@@ -687,16 +695,15 @@ if NEED:
         bar = st.container()
     with bar:
         # 先選年份與條件，球隊再依「這段期間有沒有奪冠」分成兩區
-        f1, f2, f3 = st.columns([3, 2, 4])
+        f1, f2 = st.columns([3, 2])
         if "season" in NEED:
             with f1:
                 s_from, s_to = st.select_slider("球季範圍", ALL_SEASONS, value=(s_from, s_to), key="w_range")
         if "type" in NEED:
             with f2:
                 types_sel = pills("比賽類型", list(TYPE_OPTIONS), "w_types", default=types_sel, multi=True)
-        if "metric" in NEED:
-            with f3:
-                metric_name = pills("比較指標", list(METRICS), "w_metric", default=metric_name)
+        if "metric" in NEED:   # 指標按鈕很多，放獨立一整排，才不會被切掉
+            metric_name = pills(f"比較指標（{len(METRICS)} 項）", list(METRICS), "w_metric", default=metric_name)
         if "team" in NEED:
             teams_sel = team_picker(s_from, s_to, teams_sel)
         if "type" in NEED:
@@ -2063,9 +2070,11 @@ def trend_findings(ts, col, f, name):
     if len(ch) and len(ot):
         out.append(f"<b>奪冠球季</b>的{name}平均 {fmt(ch.mean(), f)}，其他球季平均 {fmt(ot.mean(), f)}，"
                    f"差 {_diff_txt(ch.mean() - ot.mean(), f)}。")
-        d = d.assign(rk=d.groupby("season")[col].rank(ascending=False, method="min"))
+        low = "越少越好" in name   # 例如失誤：數字小才是好
+        d = d.assign(rk=d.groupby("season")[col].rank(ascending=low, method="min"))
         c = d[d["champion"]]
-        out.append(f"{len(c)} 個奪冠球季中，有 <b>{int((c['rk'] == 1).sum())}</b> 個是當季所選球隊裡{name}最高的。")
+        out.append(f"{len(c)} 個奪冠球季中，有 <b>{int((c['rk'] == 1).sum())}</b> 個是當季所選球隊裡{name}"
+                   f"{'最少' if low else '最高'}的。")
     by = d.groupby("season")[col].mean()
     if len(by) >= 2:
         out.append(f"所選球隊的平均從 {by.index[0]} 的 {fmt(by.iloc[0], f)} 變成 {by.index[-1]} 的 {fmt(by.iloc[-1], f)}。")
@@ -2097,9 +2106,10 @@ def champ_findings(cr, ts, col, f, name):
             diffs.append((r["label"], r[col] - o))
     if not diffs:
         return ["範圍內沒有可以比較的球季。"]
-    up = sum(1 for _, v in diffs if v > 0)
-    big = max(diffs, key=lambda x: x[1])
-    return [f"{len(diffs)} 個奪冠球季中，有 <b>{up}</b> 個的{name}比同隊其他球季高。",
+    low = "越少越好" in name
+    up = sum(1 for _, v in diffs if (v < 0 if low else v > 0))
+    big = (min if low else max)(diffs, key=lambda x: x[1])
+    return [f"{len(diffs)} 個奪冠球季中，有 <b>{up}</b> 個的{name}比同隊其他球季{'少' if low else '高'}。",
             f"差距最大：<b>{big[0]}</b>（{_diff_txt(big[1], f)}）。"
             + ("奪冠那季通常是這支球隊的高峰。" if up >= len(diffs) * 0.7 else "奪冠不一定是這項數字的高峰。")]
 
