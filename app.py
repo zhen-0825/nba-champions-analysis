@@ -28,18 +28,18 @@ OTHER_ZH = {"SAS": "馬刺", "DAL": "獨行俠", "MIA": "熱火", "CLE": "騎士
 ALL_ZH = {**TEAM_ZH, **OTHER_ZH}
 # 每支球隊固定一個顏色，取自球衣主視覺色，並調亮到深色背景上看得清楚
 TEAM_COLORS = {
-    "GSW": "#3B6FD4",   # 勇士：皇家藍
-    "DEN": "#FFC72C",   # 金塊：陽光黃
-    "BOS": "#1E9E4A",   # 塞爾提克：塞爾提克綠
-    "OKC": "#22B8E8",   # 雷霆：雷霆藍
-    "NYK": "#F58426",   # 尼克：尼克橘
-    "MIL": "#EEE1C6",   # 公鹿：奶油白
-    "LAL": "#A070E6",   # 湖人：湖人紫
-    "TOR": "#D8264F",   # 暴龍：暴龍紅
+    "GSW": "#1F5BCC",   # 勇士：皇家藍
+    "DEN": "#B07D00",   # 金塊：金黃（白底上調深，才看得清楚）
+    "BOS": "#00843D",   # 塞爾提克：塞爾提克綠
+    "OKC": "#0A93C9",   # 雷霆：雷霆藍
+    "NYK": "#E06A1B",   # 尼克：尼克橘
+    "MIL": "#2F5D3A",   # 公鹿：深綠（奶油白在白底上看不見，改用公鹿的另一個主色）
+    "LAL": "#6B3FB5",   # 湖人：湖人紫
+    "TOR": "#C8102E",   # 暴龍：暴龍紅
 }
-DIM = "#4a4458"          # 聚焦模式下，未選取球隊的灰色
+DIM = "#d6d2df"          # 聚焦模式下，未選取球隊的淺灰色
 # 球員比較用：依選取順序配色，最多 6 位
-PLAYER_COLORS = ["#a78bfa", "#3987e5", "#d95926", "#199e70", "#c98500", "#d55181"]
+PLAYER_COLORS = ["#6250d6", "#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4"]
 TYPE_OPTIONS = {"例行賽": "Regular Season", "附加賽": "PlayIn", "季後賽": "Playoffs"}
 
 # 球隊指標：顯示名稱 →（欄位, 格式）
@@ -67,149 +67,136 @@ P_METRICS = {
 }
 
 # 配色：黑 × 紫
-INK = "#ece8f5"           # 主要文字
-INK_2 = "#a59fb8"         # 次要文字
-MUTED = "#6f6883"         # 參考線
-GRID = "rgba(167,139,250,0.10)"
-ACCENT = "#a78bfa"        # 主色：薰衣草紫
+INK = "#1a1426"           # 主要文字（近黑）
+INK_2 = "#5f5873"         # 次要文字
+MUTED = "#8f889f"         # 參考線
+GRID = "rgba(76,42,150,0.08)"   # 很淡的紫灰格線
+ACCENT = "#7c3aed"        # 主色：紫（白底上用深一點的紫）
+SURFACE = "#ffffff"       # 圖表底色（點的外圈用它，讓重疊的點分得開）
 FONT = "Noto Sans TC, Microsoft JhengHei, sans-serif"
-# 熱力圖：同一個紫色由暗到亮（越亮數值越高）
-PURPLE_RAMP = ["#1d1630", "#2c1f52", "#41307a", "#5b41a6", "#7a57cf", "#9d80e8", "#c8b6f8"]
+# 熱力圖：同一個紫色由淺到深（越深數值越高）
+PURPLE_RAMP = ["#f3effc", "#e1d6fa", "#c7b3f3", "#a98be8", "#8a63d9", "#6b42c2", "#4c2a96"]
 
 
 # =====================================================================
 # 網頁外觀
 # =====================================================================
-st.set_page_config(page_title="NBA 冠軍球隊數據分析", page_icon="🏆", layout="wide")
+st.set_page_config(page_title="NBA 冠軍球隊數據分析", page_icon="docs/logo/zhen_logo.png" if os.path.exists("docs/logo/zhen_logo.png") else None, layout="wide")
 
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&family=Noto+Serif+TC:wght@500;700;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap');
 
-html, body, [class*="css"], .stMarkdown, .stText { font-family: 'Noto Sans TC', 'Microsoft JhengHei', sans-serif; }
-.stApp {
-  background:
-    radial-gradient(900px 480px at 85% -8%, rgba(124, 58, 237, 0.16), transparent 60%),
-    radial-gradient(700px 420px at -5% 30%, rgba(88, 28, 135, 0.12), transparent 60%),
-    #0b0910;
+/* =========================================================
+   配色：資料區用「白底＋深色字」最好讀；黑×紫用在品牌的地方
+   （左側選單、首頁橫幅、目前所在位置、重點強調），不放在圖表後面
+   ========================================================= */
+:root {
+  --bg: #f6f5fa;        /* 頁面底色：帶一點點紫的淺灰 */
+  --surface: #ffffff;   /* 卡片、表格底色 */
+  --ink: #1a1426;       /* 主要文字 */
+  --ink-2: #5f5873;     /* 次要文字 */
+  --muted: #8f889f;     /* 說明文字 */
+  --line: #e7e3ef;      /* 分隔線 */
+  --brand: #7c3aed;     /* 主色：紫 */
+  --brand-soft: #f1ebfe;
+  --night: #0d0a14;     /* 品牌黑 */
 }
-.block-container { padding-top: 2.2rem; padding-bottom: 4rem; max-width: 1400px; }
+html, body, [class*="css"], .stMarkdown, .stText { font-family: 'Noto Sans TC', 'Microsoft JhengHei', sans-serif; }
+.stApp { background: var(--bg); }
+.block-container { padding-top: 1.6rem; padding-bottom: 4rem; max-width: 1360px; }
 
-/* 側欄 */
-section[data-testid="stSidebar"] { background: #0e0b15; border-right: 1px solid rgba(167,139,250,0.14); }
-section[data-testid="stSidebar"] h3 { font-family: 'Noto Serif TC', serif; letter-spacing: 0.06em; color: #d8ccff; }
-
-/* 頁首 */
-.hero { position: relative; overflow: hidden;
-        background: linear-gradient(135deg, #1a1030 0%, #120c1f 55%, #0d0a15 100%);
-        border: 1px solid rgba(167,139,250,0.22); border-radius: 18px;
-        padding: 30px 36px 26px; margin-bottom: 22px;
-        box-shadow: 0 0 0 1px rgba(0,0,0,0.4), 0 24px 60px -30px rgba(124,58,237,0.45); }
-.hero::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 2px;
-        background: linear-gradient(90deg, transparent, #a78bfa 30%, #7c3aed 70%, transparent); }
-.hero::after { content: ""; position: absolute; right: -80px; top: -120px; width: 320px; height: 320px;
-        border-radius: 50%; border: 1px solid rgba(167,139,250,0.12);
-        box-shadow: 0 0 0 40px rgba(167,139,250,0.03), 0 0 0 90px rgba(167,139,250,0.02); }
-.hero-kicker { font-size: 0.74rem; letter-spacing: 0.32em; color: #b7a4f5; font-weight: 500; }
-.hero h1 { font-family: 'Noto Serif TC', serif; color: #f4f0ff; font-size: 2.3rem; font-weight: 900;
-           letter-spacing: 0.04em; margin: 8px 0 6px 0; padding: 0; }
-.hero-sub { color: #a59fb8; font-size: 0.95rem; margin-bottom: 14px; font-weight: 300; }
-.chip { display: inline-block; border: 1px solid rgba(167,139,250,0.32); color: #d8ccff;
-        background: rgba(124,58,237,0.10); border-radius: 999px;
-        padding: 3px 13px; margin: 4px 6px 0 0; font-size: 0.82rem; }
-
-/* 重點數字卡片 */
-.kpi { position: relative; border: 1px solid rgba(167,139,250,0.16); border-radius: 14px;
-       padding: 16px 20px 15px 22px; height: 100%;
-       background: linear-gradient(180deg, rgba(30,22,48,0.75), rgba(17,13,26,0.75)); }
-.kpi::before { content: ""; position: absolute; left: 0; top: 16px; bottom: 16px; width: 2px;
-       border-radius: 2px; background: linear-gradient(180deg, #a78bfa, #6d28d9); }
-.kpi-label { font-size: 0.76rem; letter-spacing: 0.12em; color: #a59fb8; font-weight: 500; }
-.kpi-value { font-family: 'Noto Serif TC', serif; font-size: 1.85rem; font-weight: 700;
-             color: #f4f0ff; line-height: 1.3; margin-top: 4px; }
-.kpi-sub { font-size: 0.78rem; color: #7f7894; margin-top: 2px; }
-
-/* 區塊標題 */
-.section-title { font-family: 'Noto Serif TC', serif; font-size: 1.2rem; font-weight: 700;
-                 color: #efeaff; margin: 10px 0 2px 0; letter-spacing: 0.03em; }
-.section-title::before { content: "◆"; color: #a78bfa; font-size: 0.7rem; margin-right: 10px;
-                         position: relative; top: -2px; }
-.section-sub { font-size: 0.84rem; color: #8d86a3; margin: 0 0 8px 20px; }
-
-/* 分頁 */
-.stTabs [data-baseweb="tab-list"] { gap: 4px; border-bottom: 1px solid rgba(167,139,250,0.14); }
-.stTabs [data-baseweb="tab"] { font-size: 0.98rem; font-weight: 500; padding: 10px 18px; color: #a59fb8;
-                               letter-spacing: 0.05em; }
-.stTabs [aria-selected="true"] { color: #e4dbff; }
-.stTabs [data-baseweb="tab-highlight"] { background: linear-gradient(90deg, #a78bfa, #7c3aed); height: 2px; }
-
-/* 細節 */
-hr { border-color: rgba(167,139,250,0.14) !important; }
-[data-testid="stExpander"] { border: 1px solid rgba(167,139,250,0.16); border-radius: 12px; }
-.insight { border: 1px solid rgba(167,139,250,0.25); background: rgba(124,58,237,0.08); border-radius: 12px;
-           padding: 12px 18px; margin: 4px 0 8px 0; color: #d9d0f2; font-size: 0.92rem; line-height: 1.8; }
-.insight b { color: #f4f0ff; }
-/* 按鈕、選項：更大的點擊範圍、圓角、清楚的選取狀態 */
-.stButton > button, .stDownloadButton > button {
-  border-radius: 999px; padding: 0.55rem 1.3rem; font-weight: 500; letter-spacing: 0.04em;
-  border: 1px solid rgba(167,139,250,0.35); transition: all 0.15s ease; }
-.stButton > button:hover, .stDownloadButton > button:hover {
-  border-color: #a78bfa; box-shadow: 0 0 0 3px rgba(167,139,250,0.15); transform: translateY(-1px); }
-[data-testid="stBaseButton-pills"], [data-testid="stBaseButton-pillsActive"],
-[data-testid="stBaseButton-segmented_control"], [data-testid="stBaseButton-segmented_controlActive"] {
-  min-height: 2.3rem; padding: 0.3rem 0.95rem; font-size: 0.9rem; }
-[data-testid="stBaseButton-pillsActive"], [data-testid="stBaseButton-segmented_controlActive"] {
-  background: rgba(124,58,237,0.28) !important; border-color: #a78bfa !important; color: #f4f0ff !important; }
-section[data-testid="stSidebar"] [data-testid="stWidgetLabel"] p { font-size: 0.82rem; letter-spacing: 0.1em; color: #b7a4f5; }
-[data-testid="stDataFrame"] { border: 1px solid rgba(167,139,250,0.16); border-radius: 12px; overflow: hidden; }
-
-/* 精簡表格：只有橫向細線、數字靠右對齊 */
-.ntable { width: 100%; border-collapse: collapse; font-size: 0.9rem; margin: 4px 0 8px 0; }
-.ntable th { text-align: left; font-weight: 500; font-size: 0.74rem; letter-spacing: 0.12em; color: #9d93b8;
-             padding: 8px 12px; border-bottom: 1px solid rgba(167,139,250,0.30); }
-.ntable td { padding: 9px 12px; color: #e4ddf5; border-bottom: 1px solid rgba(167,139,250,0.08); }
-.ntable td.num, .ntable th.num { text-align: right; font-variant-numeric: tabular-nums; }
-.ntable tr:hover td { background: rgba(124,58,237,0.08); }
-.ntable .pos { color: #c4b2ff; } .ntable .neg { color: #8a8399; }
-.ntable .barcell { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
-.ntable .bar { display: inline-block; height: 6px; flex: 0 0 auto; border-radius: 3px;
-               background: linear-gradient(90deg, #6d28d9, #a78bfa); opacity: 0.8; }
-.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px; position: relative; top: -1px; }
-/* ===== 導覽（左側頁面選單，參考 YouTube）===== */
-.brand { font-family: 'Noto Serif TC', serif; font-size: 1.25rem; font-weight: 900; color: #f4f0ff;
-         letter-spacing: 0.06em; margin: 0 0 14px 6px; }
-.nav-group { font-size: 0.72rem; letter-spacing: 0.22em; color: #8d86a3; margin: 18px 0 4px 10px; }
+/* ===== 左側：品牌黑底選單（參考 YouTube 的左側導覽）===== */
+section[data-testid="stSidebar"] { background: var(--night); border-right: 1px solid #241b38; }
+section[data-testid="stSidebar"] * { color: #d9d3ea; }
+section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p { color: #8d86a3 !important; font-size: 0.78rem; }
+section[data-testid="stSidebar"] hr { border-color: #241b38 !important; }
+.logo { display: flex; align-items: center; gap: 12px; margin: 0 0 18px 4px; }
+.logo img { width: 38px; height: 38px; }
+.logo-name { font-size: 1.35rem; font-weight: 900; letter-spacing: 0.02em; line-height: 1.1; }
+.logo-name .z { color: #a78bfa !important; } .logo-name .h { color: #f4f0ff !important; }
+.logo-tag { font-size: 0.62rem; letter-spacing: 0.22em; color: #8d86a3 !important; margin-top: 2px; }
+.nav-group { font-size: 0.72rem; letter-spacing: 0.16em; color: #8d86a3 !important; margin: 18px 0 4px 12px; }
 section[data-testid="stSidebar"] .stButton > button {
   justify-content: flex-start; text-align: left; border-radius: 10px; padding: 0.5rem 0.9rem;
-  border: 1px solid transparent; background: transparent; color: #cfc7e6; box-shadow: none; transform: none; }
-section[data-testid="stSidebar"] .stButton > button:hover {
-  background: rgba(167,139,250,0.10); border-color: transparent; box-shadow: none; transform: none; }
+  border: 1px solid transparent; background: transparent; box-shadow: none; }
+section[data-testid="stSidebar"] .stButton > button:hover { background: #1c1529; border-color: transparent; }
 section[data-testid="stSidebar"] [data-testid="stBaseButton-primary"] {
-  background: rgba(124,58,237,0.28) !important; color: #f4f0ff !important; font-weight: 700;
-  border-left: 3px solid #a78bfa !important; }
-section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] { gap: 0.25rem; }
+  background: #2a1d4a !important; border-left: 3px solid #a78bfa !important; }
+section[data-testid="stSidebar"] [data-testid="stBaseButton-primary"] p { color: #ffffff !important; font-weight: 700; }
+section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] { gap: 0.2rem; }
 
-/* ===== 各頁的細長頁首（麵包屑＋標題＋這頁的問題）===== */
-.pagehead { border-bottom: 1px solid rgba(167,139,250,0.16); padding: 2px 0 14px 0; margin-bottom: 14px; }
-.pagehead .crumb { font-size: 0.74rem; letter-spacing: 0.18em; color: #8d86a3; }
-.pagehead h2 { font-family: 'Noto Serif TC', serif; font-weight: 900; color: #f4f0ff; font-size: 1.9rem;
-               margin: 4px 0 2px 0; padding: 0; }
-.pagehead .pq { color: #b7a4f5; font-size: 1rem; }
+/* ===== 首頁橫幅：唯一一塊大面積的黑×紫 ===== */
+.hero { background: var(--night); border-radius: 16px; padding: 28px 32px 24px; margin-bottom: 18px;
+        border-left: 4px solid var(--brand); }
+.hero h1 { color: #ffffff; font-size: 2rem; font-weight: 900; margin: 0 0 6px 0; padding: 0; }
+.hero-sub { color: #b9b1cf; font-size: 0.98rem; margin-bottom: 14px; }
+.chip { display: inline-block; border: 1px solid #3a2d5c; color: #d9d0f5; background: #1a1328;
+        border-radius: 999px; padding: 3px 12px; margin: 4px 6px 0 0; font-size: 0.8rem; }
+
+/* ===== 各頁頁首：麵包屑＋標題＋這頁的問題 ===== */
+.pagehead { padding: 0 0 12px 0; margin-bottom: 12px; border-bottom: 1px solid var(--line); }
+.pagehead .crumb { font-size: 0.78rem; color: var(--muted); }
+.pagehead h2 { font-weight: 900; color: var(--ink); font-size: 1.7rem; margin: 2px 0 2px 0; padding: 0; }
+.pagehead .pq { color: var(--brand); font-size: 1rem; font-weight: 500; }
+
+/* ===== 數字卡 ===== */
+.kpi { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; height: 100%; }
+.kpi-label { font-size: 0.8rem; color: var(--ink-2); font-weight: 500; }
+.kpi-value { font-size: 1.7rem; font-weight: 900; color: var(--ink); line-height: 1.3; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.kpi-sub { font-size: 0.78rem; color: var(--muted); margin-top: 2px; }
+
+/* ===== 區塊標題：左邊一條紫色短線，取代裝飾符號 ===== */
+.section-title { font-size: 1.12rem; font-weight: 700; color: var(--ink); margin: 18px 0 2px 0;
+                 padding-left: 10px; border-left: 3px solid var(--brand); line-height: 1.3; }
+.section-sub { font-size: 0.85rem; color: var(--ink-2); margin: 2px 0 8px 13px; }
+
+/* ===== 篩選列、圖表外框 ===== */
+[data-testid="stVerticalBlockBorderWrapper"] { background: var(--surface); border-color: var(--line) !important; border-radius: 12px; }
+[data-testid="stPlotlyChart"] { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 6px 4px; }
+[data-testid="stExpander"] { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+[data-testid="stDataFrame"] { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+hr { border-color: var(--line) !important; }
+
+/* ===== 重點摘要框：淡紫底、深色字 ===== */
+.insight { border: 1px solid #ddd0fb; background: var(--brand-soft); border-radius: 12px;
+           padding: 12px 18px; margin: 6px 0 10px 0; color: #2d2245; font-size: 0.92rem; line-height: 1.8; }
+.insight b { color: #4c1d95; }
+
+/* ===== 按鈕、選項 ===== */
+.stButton > button, .stDownloadButton > button { border-radius: 999px; padding: 0.5rem 1.2rem; font-weight: 500; }
+[data-testid="stBaseButton-pills"], [data-testid="stBaseButton-pillsActive"],
+[data-testid="stBaseButton-segmented_control"], [data-testid="stBaseButton-segmented_controlActive"] {
+  min-height: 2.2rem; padding: 0.3rem 0.9rem; font-size: 0.9rem; }
+[data-testid="stBaseButton-pillsActive"], [data-testid="stBaseButton-segmented_controlActive"] {
+  background: var(--brand-soft) !important; border-color: var(--brand) !important; color: #4c1d95 !important; }
+
+/* ===== 精簡表格：只有橫向細線、數字靠右對齊 ===== */
+.ntable { width: 100%; border-collapse: collapse; font-size: 0.9rem; margin: 4px 0 8px 0; background: var(--surface);
+          border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.ntable th { text-align: left; font-weight: 500; font-size: 0.78rem; color: var(--ink-2);
+             padding: 9px 12px; border-bottom: 1px solid #d9d3e6; background: #faf9fc; }
+.ntable td { padding: 9px 12px; color: var(--ink); border-bottom: 1px solid #f0edf5; }
+.ntable td.num, .ntable th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.ntable tr:hover td { background: #f7f3ff; }
+.ntable .pos { color: #5b21b6; font-weight: 500; } .ntable .neg { color: var(--muted); }
+.ntable .barcell { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+.ntable .bar { display: inline-block; height: 6px; flex: 0 0 auto; border-radius: 3px; background: #a78bfa; }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px; position: relative; top: -1px; }
 
 /* ===== 首頁卡片牆（參考 YouTube 影片卡）===== */
-.home-group { font-family: 'Noto Serif TC', serif; font-size: 1.15rem; font-weight: 700; color: #efeaff;
-              margin: 26px 0 10px 0; letter-spacing: 0.05em; }
-.card { position: relative; border: 1px solid rgba(167,139,250,0.18); border-radius: 16px; overflow: hidden;
-        background: linear-gradient(180deg, rgba(30,22,48,0.85), rgba(15,11,23,0.85));
-        padding: 18px 20px 16px 20px; min-height: 178px; margin-bottom: 8px; transition: border-color 0.15s ease; }
-.card:hover { border-color: #a78bfa; }
-.card::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 3px;
-                background: linear-gradient(90deg, #6d28d9, #a78bfa, transparent); }
-.card-num { font-family: 'Noto Serif TC', serif; font-size: 0.85rem; color: #8d7fc0; letter-spacing: 0.2em; }
-.card-title { font-family: 'Noto Serif TC', serif; font-size: 1.3rem; font-weight: 900; color: #f4f0ff; margin-top: 6px; }
-.card-q { color: #c8b6f8; font-size: 0.95rem; margin-top: 2px; }
-.card-desc { color: #8d86a3; font-size: 0.84rem; line-height: 1.6; margin-top: 10px; }
-.footnote { color: #6f6883; font-size: 0.78rem; text-align: center; margin-top: 36px; letter-spacing: 0.08em; }
+.home-group { font-size: 1.1rem; font-weight: 700; color: var(--ink); margin: 24px 0 10px 0; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+        min-height: 176px; margin-bottom: 8px; transition: box-shadow 0.15s ease, border-color 0.15s ease; }
+.card:hover { border-color: #c4b5fd; box-shadow: 0 6px 18px -10px rgba(76,29,149,0.35); }
+.card-top { background: var(--night); padding: 12px 18px; display: flex; justify-content: space-between; align-items: center; }
+.card-num { font-size: 0.8rem; color: #a78bfa; font-weight: 700; letter-spacing: 0.1em; }
+.card-tag { font-size: 0.72rem; color: #b9b1cf; }
+.card-body { padding: 12px 18px 16px 18px; }
+.card-title { font-size: 1.2rem; font-weight: 900; color: var(--ink); }
+.card-q { color: var(--brand); font-size: 0.93rem; margin-top: 2px; font-weight: 500; }
+.card-desc { color: var(--ink-2); font-size: 0.84rem; line-height: 1.6; margin-top: 8px; }
+.footnote { color: var(--muted); font-size: 0.78rem; text-align: center; margin-top: 36px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -237,7 +224,7 @@ def style(fig, height):
         font=dict(family=FONT, size=13, color=INK),
         plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
         hoverlabel=dict(font=dict(family=FONT, size=13, color=INK),
-                        bgcolor="#1b1528", bordercolor="#6d4fc2"),
+                        bgcolor="#ffffff", bordercolor="#c4b5fd"),
         legend=dict(orientation="h", y=-0.16, x=0, font=dict(color=INK_2)),
         bargap=0.35,
     )
@@ -317,7 +304,7 @@ def champion_bands(fig, seasons, team):
             fig.add_vrect(x0=i - 0.5, x1=i + 0.5, fillcolor="rgba(167,139,250,0.10)",
                           line_width=0, layer="below")
             fig.add_annotation(x=s, y=1.0, yref="paper", yanchor="bottom", showarrow=False,
-                               text="★ 奪冠", font=dict(size=11, color="#cbb8ff"))
+                               text="★ 奪冠", font=dict(size=11, color="#6d28d9"))
 
 
 # =====================================================================
@@ -515,6 +502,9 @@ P_COLS = ["gp", "min", "pts", "fgm", "fga", "fg3m", "fg3a", "ftm", "fta", "reb",
 # =====================================================================
 # 導覽：左側像 YouTube 一樣是「頁面選單」，篩選條件移到各頁上方
 # =====================================================================
+# ZheN 標誌：黑底圓角方塊裡一個紫色的 Z，下面那一橫做成上升的折線＋一個資料點（原始檔在 docs/logo/）
+LOGO_B64 = "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MCIgaGVpZ2h0PSI0MCIgdmlld0JveD0iMCAwIDQwIDQwIj4gPGRlZnM+IDxsaW5lYXJHcmFkaWVudCBpZD0iemciIHgxPSIwIiB5MT0iMCIgeDI9IjEiIHkyPSIxIj4gPHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjYzRiNWZkIi8+IDxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iIzdjM2FlZCIvPiA8L2xpbmVhckdyYWRpZW50PiA8L2RlZnM+IDxyZWN0IHg9IjAuNSIgeT0iMC41IiB3aWR0aD0iMzkiIGhlaWdodD0iMzkiIHJ4PSIxMCIgZmlsbD0iIzBkMGExNCIgc3Ryb2tlPSIjN2MzYWVkIiBzdHJva2Utb3BhY2l0eT0iMC43Ii8+IDxwYXRoIGQ9Ik0xMSAxMS41IEgyOC41IEwxMS41IDI3LjUgTDE3IDI3LjUgTDIxLjUgMjMuNSBMMjUgMjYgTDI5LjUgMjEiIGZpbGw9Im5vbmUiIHN0cm9rZT0idXJsKCN6ZykiIHN0cm9rZS13aWR0aD0iMyIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+IDxjaXJjbGUgY3g9IjI5LjUiIGN5PSIyMSIgcj0iMi40IiBmaWxsPSIjZjRmMGZmIi8+IDwvc3ZnPg=="
+
 # （群組, 頁面名稱, 這頁回答的問題, 卡片說明, 這頁要用到哪些篩選）
 PAGES = [
     ("冠軍故事", "冠軍密碼", "奪冠最需要什麼？",
@@ -526,7 +516,7 @@ PAGES = [
     ("自由探索", "球季趨勢", "各隊一路怎麼變化？",
      "選一個指標，看各隊 20 季的折線；可聚焦幾支球隊，其他變灰。", {"team", "season", "type", "metric"}),
     ("自由探索", "球隊 × 球季", "哪隊在哪季特別突出？",
-     "熱力圖一次看完所有球隊、所有球季，越亮越高，★ 是奪冠季。", {"team", "season", "type", "metric"}),
+     "熱力圖一次看完所有球隊、所有球季，顏色越深越高，★ 是奪冠季。", {"team", "season", "type", "metric"}),
     ("自由探索", "冠軍球季比較", "奪冠那季比平常強多少？",
      "每支冠軍隊的奪冠球季，和它其他球季的平均差多少。", {"team", "season", "type", "metric"}),
     ("資料", "球員", "誰是冠軍的關鍵球員？",
@@ -558,7 +548,10 @@ if st.session_state["page"] not in PAGE_INFO:   # 舊網址或改過名字的頁
 PAGE = st.session_state["page"]
 
 with st.sidebar:
-    st.markdown('<div class="brand">NBA 冠軍分析</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="logo"><img src="data:image/svg+xml;base64,{LOGO_B64}" alt="ZheN">'
+                '<div><div class="logo-name"><span class="z">Z</span><span class="h">he</span>'
+                '<span class="z">N</span></div><div class="logo-tag">NBA 冠軍數據分析</div></div></div>',
+                unsafe_allow_html=True)
     st.button("首頁", key="nav_home", width="stretch", on_click=goto, args=(HOME,),
               type="primary" if PAGE == HOME else "secondary")
     for grp in dict.fromkeys(p[0] for p in PAGES):     # 依序列出三個群組
@@ -581,7 +574,6 @@ with st.sidebar:
 if PAGE == HOME:
     st.markdown(f"""
 <div class="hero">
-  <div class="hero-kicker">NBA CHAMPIONSHIP ANALYTICS</div>
   <h1>NBA 冠軍球隊數據分析</h1>
   <div class="hero-sub">2019–2026 八屆冠軍，近二十年的數據軌跡：冠軍的關鍵是什麼？</div>
   <span class="chip">{ALL_SEASONS[0]} – {ALL_SEASONS[-1]}</span>
@@ -678,9 +670,10 @@ if PAGE == HOME:
         for i, (_, name, question, desc, _) in enumerate(items):
             n = PAGES.index(PAGE_INFO[name]) + 1
             with cols[i % 3]:
-                st.markdown(f'<div class="card"><div class="card-num">{n:02d}</div>'
+                st.markdown(f'<div class="card"><div class="card-top"><span class="card-num">{n:02d}</span>'
+                            f'</div><div class="card-body">'
                             f'<div class="card-title">{name}</div><div class="card-q">{question}</div>'
-                            f'<div class="card-desc">{desc}</div></div>', unsafe_allow_html=True)
+                            f'<div class="card-desc">{desc}</div></div></div>', unsafe_allow_html=True)
                 st.button(f"前往「{name}」", key=f"card_{name}", width="stretch", on_click=goto, args=(name,))
     st.markdown('<div class="footnote">DATA · NBA STATS API　｜　STORAGE · SUPABASE　｜　BUILT WITH STREAMLIT</div>',
                 unsafe_allow_html=True)
@@ -754,8 +747,8 @@ if PAGE == "冠軍密碼":
             fig = go.Figure()
             fig.add_vrect(x0=0.5, x1=5.5, fillcolor="rgba(167,139,250,0.08)", line_width=0, layer="below")
             fig.add_annotation(x=3, y=n_f - 0.35, text="聯盟前 5", showarrow=False,
-                               font=dict(size=11, color="#b7a4f5"))
-            for era, name, colr in [(False, f"{q_seasons[0][:4]}～2018 冠軍", "#7d7594"),
+                               font=dict(size=11, color="#6d28d9"))
+            for era, name, colr in [(False, f"{q_seasons[0][:4]}～2018 冠軍", "#b3adc2"),
                                     (True, "2019～2026 冠軍", ACCENT)]:
                 xs, ys, hov = [], [], []
                 for i, f in summ.iterrows():
@@ -771,10 +764,10 @@ if PAGE == "冠軍密碼":
                 fig.add_trace(go.Scatter(x=xs, y=ys, mode="markers", name=name, text=hov,
                                          hovertemplate="%{text}<extra></extra>",
                                          marker=dict(size=9, color=colr, opacity=0.85,
-                                                     line=dict(width=1, color="#0b0910"))))
+                                                     line=dict(width=1, color=SURFACE))))
             fig.add_trace(go.Scatter(
                 x=summ["median"], y=[n_f - 1 - i for i in range(n_f)], mode="markers", name="中位數",
-                marker=dict(symbol="diamond", size=14, color="#f4f0ff", line=dict(width=2, color="#7c3aed")),
+                marker=dict(symbol="diamond", size=14, color=SURFACE, line=dict(width=2, color="#7c3aed")),
                 customdata=summ[["label", "top5"]].values,
                 hovertemplate="<b>%{customdata[0]}</b><br>冠軍排名中位數：第 %{x:.0f} 名"
                               "<br>排聯盟前 5 的冠軍：%{customdata[1]:.0%}<extra></extra>"))
@@ -815,12 +808,12 @@ if PAGE == "冠軍密碼":
                                      fill="tonexty", fillcolor="rgba(167,139,250,0.13)",
                                      name="30 隊範圍（最低～最高）", hoverinfo="skip"))
             fig.add_trace(go.Scatter(x=avg.index, y=avg.values, mode="lines+markers", name="聯盟平均",
-                                     line=dict(color="#bdb6cf", width=2), marker=dict(size=5, color="#bdb6cf"),
+                                     line=dict(color="#a39cb3", width=2), marker=dict(size=5, color="#a39cb3"),
                                      hovertemplate="聯盟平均 %{y:" + (".1%" if q2_kind == "pct" else ".1f") + "}<extra></extra>"))
             fig.add_trace(go.Scatter(
                 x=ch2.index, y=ch2[q2_col], mode="markers+text", name="冠軍",
                 text=ch2["abbreviation"], textposition="top center", textfont=dict(size=10, color=INK_2),
-                marker=dict(symbol="star", size=16, color=ACCENT, line=dict(width=1.2, color="#f4f0ff")),
+                marker=dict(symbol="star", size=16, color=ACCENT, line=dict(width=1.2, color=SURFACE)),
                 hovertemplate="冠軍 %{text}　%{y:" + (".1%" if q2_kind == "pct" else ".1f") + "}<extra></extra>"))
             fig.update_xaxes(categoryorder="array", categoryarray=q_seasons, type="category")
             fig.update_yaxes(title=q2_name, tickformat=".0%" if q2_kind == "pct" else None)
@@ -866,10 +859,10 @@ if PAGE == "冠軍密碼":
             if any(s >= RECENT for s in q_seasons):
                 fig.add_annotation(x=max(RECENT, q_seasons[0]), y=1.0, yref="paper", yanchor="bottom",
                                    xanchor="left", showarrow=False, text="2019～2026　連續 8 年不同冠軍",
-                                   font=dict(size=11, color="#cbb8ff"))
+                                   font=dict(size=11, color="#6d28d9"))
             fig.add_trace(go.Scatter(x=sd.index, y=sd.values, mode="lines+markers", name=f"{q3_name}標準差",
                                      line=dict(color=ACCENT, width=2.4),
-                                     marker=dict(size=7, color=ACCENT, line=dict(width=1.5, color="#0b0910")),
+                                     marker=dict(size=7, color=ACCENT, line=dict(width=1.5, color=SURFACE)),
                                      hovertemplate="%{x}　標準差 %{y:" + q3_fmt + "}<extra></extra>"))
             fig.update_xaxes(categoryorder="array", categoryarray=q_seasons, type="category")
             fig.update_yaxes(title=f"30 隊{q3_name}的標準差", tickformat=".0%" if "%" in q3_fmt else None)
@@ -890,7 +883,7 @@ if PAGE == "冠軍密碼":
             insight(lines)
 
             section("假設二：每支冠軍的打法都不同",
-                    "近年冠軍在各項打法的聯盟排名；越亮代表排名越前面。節奏第 1 = 最快，失誤少第 1 = 失誤最少")
+                    "近年冠軍在各項打法的聯盟排名；顏色越深代表排名越前面。節奏第 1 = 最快，失誤少第 1 = 失誤最少")
             HS = CH[CH["season"] >= RECENT] if len(ch_recent) else CH.tail(8)
             labels = [f"{s} {team_label(a)}" for s, a in zip(HS["season"], HS["abbreviation"])]
             for _, col, hb in STYLE:   # 節奏、失誤少的排名
@@ -908,7 +901,7 @@ if PAGE == "冠軍密碼":
                     if pd.isna(v):
                         continue
                     fig.add_annotation(x=name, y=lab, showarrow=False, text=f"第 {int(v)}",
-                                       font=dict(size=11, color="#140e20" if v <= 8 else "#efeaf8"))
+                                       font=dict(size=11, color="#ffffff" if v <= 8 else INK))
             fig.update_yaxes(autorange="reversed", showgrid=False)
             fig.update_xaxes(showgrid=False, side="top")
             st.plotly_chart(style(fig, 90 + 46 * len(labels)), width="stretch")
@@ -939,7 +932,7 @@ def court_shapes():
 
     a = math.degrees(math.acos(220 / 237.5))         # 三分弧和底角直線的交點角度
     yc = 237.5 * math.sin(math.radians(a))
-    ln = dict(color="rgba(200,182,248,0.30)", width=1.4)
+    ln = dict(color="rgba(60,40,100,0.30)", width=1.4)
     return [
         dict(type="rect", x0=-80, y0=-47.5, x1=80, y1=142.5, line=ln),        # 油漆區
         dict(type="line", x0=-30, y0=-7.5, x1=30, y1=-7.5, line=ln),          # 籃板
@@ -1085,7 +1078,7 @@ if PAGE == "投籃分布":
                 fig = go.Figure()
                 made = df["made"].astype(bool)
                 ms = 5 if sh_pid is None else 8   # 單一球員點比較少，畫大一點
-                for ok, name, mk in [(False, "沒進", dict(symbol="x", size=ms, color="#6f6883", opacity=0.6)),
+                for ok, name, mk in [(False, "沒進", dict(symbol="x", size=ms, color="#9a93a9", opacity=0.6)),
                                      (True, "投進", dict(size=ms, color=color, opacity=0.75))]:
                     d = df[made == ok]
                     fig.add_trace(go.Scatter(
@@ -1134,10 +1127,10 @@ if PAGE == "投籃分布":
                         size = 16 + 46 * (zm["share"] / zm["share"].max()) ** 0.5
                         fig.add_trace(go.Scatter(
                             x=zm["x"], y=zm["y"], mode="markers+text",
-                            text=[f"{v:.0%}" for v in zm["fg_pct"]], textfont=dict(size=11, color="#f4f0ff"),
+                            text=[f"{v:.0%}" for v in zm["fg_pct"]], textfont=dict(size=11, color=INK),
                             marker=dict(size=size, color=zm["diff"].fillna(0), cmin=-8, cmax=8,
-                                        colorscale=[[0, "#4f7cc9"], [0.5, "#3a3150"], [1, "#c58cff"]],
-                                        line=dict(width=1, color="rgba(244,240,255,0.35)"),
+                                        colorscale=[[0, "#3d74c9"], [0.5, "#ece9f2"], [1, "#7c3aed"]],
+                                        line=dict(width=1, color="rgba(26,20,38,0.25)"),
                                         colorbar=dict(title=dict(text="命中率差<br>（百分點）", font=dict(size=11, color=INK_2)),
                                                       thickness=10, outlinewidth=0, len=0.6,
                                                       tickfont=dict(color=INK_2))),
@@ -1155,11 +1148,11 @@ if PAGE == "投籃分布":
             with right:
                 ga = group_table(za)
                 gb = group_table(zb) if not zb.empty else None
-                section("五大區出手佔比", f"每 100 次出手有幾次在這一區；亮色＝{a_label}、灰色＝{b_label}")
+                section("五大區出手佔比", f"每 100 次出手有幾次在這一區；彩色＝{a_label}（球隊色）、灰色＝{b_label}")
                 fig = go.Figure()
                 if gb is not None:
                     fig.add_trace(go.Bar(y=GROUP_ORDER, x=gb["share"], orientation="h", name=b_label,
-                                         marker=dict(color="#5d5670"),
+                                         marker=dict(color="#c9c3d6"),
                                          hovertemplate="%{y}　%{x:.1%}<extra>" + b_label + "</extra>"))
                 fig.add_trace(go.Bar(y=GROUP_ORDER, x=ga["share"], orientation="h", name=a_label,
                                      marker=dict(color=color), text=[fmt(v, ".0%") for v in ga["share"]],
@@ -1240,13 +1233,13 @@ if PAGE == "投籃分布":
                 fig = go.Figure()
                 if not ts_lg.empty:
                     fig.add_trace(go.Scatter(x=ts_lg.index, y=ts_lg.values, mode="lines+markers", name="聯盟平均",
-                                             line=dict(color="#8a8399", width=1.8, dash="dot"),
-                                             marker=dict(size=5, color="#8a8399"),
+                                             line=dict(color="#8f889f", width=1.8, dash="dot"),
+                                             marker=dict(size=5, color="#8f889f"),
                                              hovertemplate="聯盟 %{y:.1%}<extra></extra>"))
                 if not ts_team.empty:
                     fig.add_trace(go.Scatter(x=ts_team.index, y=ts_team.values, mode="lines+markers",
                                              name=sh_pname or team_label(sh_team), line=dict(color=color, width=2.6),
-                                             marker=dict(size=7, color=color, line=dict(width=1.5, color="#0b0910")),
+                                             marker=dict(size=7, color=color, line=dict(width=1.5, color=SURFACE)),
                                              hovertemplate=who + " %{y:.1%}<extra></extra>"))
                     # 奪冠球季：球員可能換過隊，所以用「那一季他效力的球隊」判斷
                     abbr_of = dict(zip(team_raw["team_id"], team_raw["abbreviation"]))
@@ -1257,7 +1250,7 @@ if PAGE == "投籃分布":
                     if cs:
                         fig.add_trace(go.Scatter(x=cs, y=ts_team.reindex(cs).values, mode="markers", showlegend=False,
                                                  hoverinfo="skip", marker=dict(symbol="star", size=20, color=color,
-                                                                               line=dict(width=1.5, color="#f4f0ff"))))
+                                                                               line=dict(width=1.5, color=SURFACE))))
                     last = ts_team.index[-1]
                     fig.add_annotation(x=last, y=ts_team.iloc[-1], text=sh_pname or sh_team, showarrow=False, xanchor="left",
                                        xshift=10, font=dict(size=11, color=INK_2))
@@ -1332,7 +1325,7 @@ if PAGE == "投籃分布":
                     xlab = [s + (" ★" if (s, tm.get(s, sh_team)) in CHAMP_SET else "") for s in seasons_mv]
 
                     if col == "vs_lg":
-                        scale, zmin, zmax = [[0, "#4f7cc9"], [0.5, "#3a3150"], [1, "#c58cff"]], -8, 8
+                        scale, zmin, zmax = [[0, "#3d74c9"], [0.5, "#ece9f2"], [1, "#7c3aed"]], -8, 8
                     else:
                         scale = [[i / (len(PURPLE_RAMP) - 1), c] for i, c in enumerate(PURPLE_RAMP)]
                         zmin, zmax = None, None
@@ -1355,8 +1348,7 @@ if PAGE == "投籃分布":
                             bright = (abs(v) > 5) if col == "vs_lg" else ((v - lo) / ((hi - lo) or 1) > 0.6)
                             txt = f"{v:+.0f}" if col == "vs_lg" else f"{v:.0%}"
                             fig.add_annotation(x=s, y=k, text=txt, showarrow=False,
-                                               font=dict(size=10.5, color="#140e20" if bright and col != "vs_lg"
-                                                         else "#efeaf8"))
+                                               font=dict(size=10.5, color="#ffffff" if bright else INK))
                     fig.update_yaxes(autorange="reversed", showgrid=False)
                     fig.update_xaxes(showgrid=False, side="top", type="category")
                     st.plotly_chart(style(fig, 90 + 40 * len(keys)), width="stretch")
@@ -1429,8 +1421,8 @@ if PAGE == "投籃分布":
                                 x=f["x"], y=f["y"], mode="markers",
                                 marker=dict(size=8 + 34 * (f["share"] / 0.35).clip(upper=1) ** 0.5,
                                             color=f["d"].fillna(0), cmin=-8, cmax=8,
-                                            colorscale=[[0, "#4f7cc9"], [0.5, "#3a3150"], [1, "#c58cff"]],
-                                            line=dict(width=1, color="rgba(244,240,255,0.35)")),
+                                            colorscale=[[0, "#3d74c9"], [0.5, "#ece9f2"], [1, "#7c3aed"]],
+                                            line=dict(width=1, color="rgba(26,20,38,0.25)")),
                                 customdata=f[["zone_basic", "fga", "share", "fg", "d"]].values,
                                 hovertemplate="%{customdata[0]}<br>出手 %{customdata[1]:,.0f}（%{customdata[2]:.0%}）"
                                               "<br>命中率 %{customdata[3]:.1%}（vs 聯盟 %{customdata[4]:+.1f}）"
@@ -1441,7 +1433,7 @@ if PAGE == "投籃分布":
                                              scaleanchor="x", scaleratio=1)   # 每張小球場比例、大小都一樣
                             star = " ★" if s in champ_cols else ""
                             c_.markdown(f'<div class="section-sub" style="margin-left:0;text-align:center">'
-                                        f'<b style="color:#efeaff">{s}{star}</b>　出手 {int(f["fga"].sum()):,}</div>',
+                                        f'<b style="color:#1a1426">{s}{star}</b>　出手 {int(f["fga"].sum()):,}</div>',
                                         unsafe_allow_html=True)
                             fig = style(fig, 280)
                             fig.update_layout(margin=dict(l=0, r=0, t=0, b=0))
@@ -1564,12 +1556,12 @@ if PAGE == "戰術使用":
                                   (xr, -yr, bad), (-xr, -yr, "用得少也沒效率" if is_off else "少被打但守不住")]:
                     fig.add_annotation(x=x, y=y, text=txt, showarrow=False, opacity=0.75,
                                        xanchor="right" if x > 0 else "left", yanchor="top" if y > 0 else "bottom",
-                                       font=dict(size=11, color="#8d86a3"))
+                                       font=dict(size=11, color=INK_2))
                 fig.add_trace(go.Scatter(
                     x=plot["d_share"], y=plot["d_ppp"], mode="markers+text", text=plot["name"],
                     textposition="top center", textfont=dict(size=12, color=INK),
                     marker=dict(size=10 + 30 * (plot["poss_pct"] / 0.3).clip(upper=1) ** 0.5,
-                                color=color, opacity=0.8, line=dict(width=1, color="rgba(244,240,255,0.5)")),
+                                color=color, opacity=0.8, line=dict(width=1, color="rgba(26,20,38,0.35)")),
                     customdata=plot[["name", "poss_pct", "lg_share", "ppp", "lg_ppp", "rk_ppp", "n_teams"]].values,
                     hovertemplate="<b>%{customdata[0]}</b><br>使用率 %{customdata[1]:.1%}（聯盟 %{customdata[2]:.1%}）"
                                   "<br>每回合" + ("得分" if is_off else "失分") +
@@ -1616,7 +1608,7 @@ if PAGE == "戰術使用":
             # ===== 八位冠軍的共同點 =====
             st.write("")
             section(f"八位冠軍的共同點：每種戰術在聯盟排第幾？（{side_zh}）",
-                    "每一欄是一位冠軍；格子裡的數字是聯盟排名（1 = 最好），顏色越亮越前面；最右欄是八位冠軍的中位數")
+                    "每一欄是一位冠軍；格子裡的數字是聯盟排名（1 = 最好），顏色越深越前面；最右欄是八位冠軍的中位數")
             rank_kind = seg("排名依據", ["效率（每回合得分）", "使用率（用得多不多）"], "pl_rank_kind")
             rk_col = "rk_ppp" if rank_kind.startswith("效率") else "rk_use"
             ch = champs[champs["season"].isin(PT["season"].unique())].sort_values("season")
@@ -1637,7 +1629,7 @@ if PAGE == "戰術使用":
                 hm["中位數"] = hm[cols].median(axis=1)
                 hm = hm.sort_values("中位數")
                 z = hm.values.astype(float)
-                ramp = PURPLE_RAMP[::-1]   # 排名數字越小（越好）越亮
+                ramp = PURPLE_RAMP[::-1]   # 排名數字越小（越好）顏色越深
                 fig = go.Figure(go.Heatmap(
                     z=z, x=list(hm.columns), y=[PLAY_ZH.get(p, p) for p in hm.index],
                     zmin=1, zmax=30, xgap=2, ygap=2, showscale=False,
@@ -1648,12 +1640,12 @@ if PAGE == "戰術使用":
                         if pd.notna(z[i, j]):
                             fig.add_annotation(x=hm.columns[j], y=PLAY_ZH.get(hm.index[i], hm.index[i]),
                                                text=f"{z[i, j]:.0f}", showarrow=False,
-                                               font=dict(size=11, color="#140e20" if z[i, j] <= 8 else "#efeaf8"))
+                                               font=dict(size=11, color="#ffffff" if z[i, j] <= 8 else INK))
                 fig.update_yaxes(autorange="reversed", showgrid=False)
                 fig.update_xaxes(showgrid=False, side="top")
                 st.plotly_chart(style(fig, 90 + 42 * len(hm)), width="stretch")
                 strong = [PLAY_ZH.get(p, p) for p in hm.index[hm["中位數"] <= 10]]
-                st.caption("讀法：橫著看一列，如果八位冠軍大多在前 10 名（亮色），這個戰術就是「冠軍共同點」。"
+                st.caption("讀法：橫著看一列，如果八位冠軍大多在前 10 名（深紫色），這個戰術就是「冠軍共同點」。"
                            + (f"目前中位數在前 10 名的：{'、'.join(strong)}。" if strong else
                               "目前沒有任何戰術的中位數在前 10 名：冠軍各有各的打法。")
                            + "改成「使用率」，就能檢查假設：如果使用率排名分散、效率排名集中在前面，代表冠軍贏在效率。")
@@ -1750,7 +1742,7 @@ if PAGE == "戰術使用":
                 star = " ★" if (pl_season, t) in champ_ids else ""
                 labels.append(f"{ab} {ALL_ZH.get(ab, '')}{star}　{'' if pd.isna(w_) else format(w_, '.0%')}".strip())
             z = hm.values.astype(float)
-            # 顏色：越亮越「好」或越「多」。效率排名、防守失分是數字越小越好，所以色階反過來
+            # 顏色：越深越「好」或越「多」。效率排名、防守失分是數字越小越好，所以色階反過來
             reverse = col_key == "rk_ppp" or (col_key == "ppp" and not is_off)
             ramp = PURPLE_RAMP[::-1] if reverse else PURPLE_RAMP
             zz = z[:-1] if len(z) > 1 else z
@@ -1768,7 +1760,7 @@ if PAGE == "戰術使用":
                             lvl = (z[i, j] - zmin) / ((zmax - zmin) or 1)
                             lvl = 1 - lvl if reverse else lvl
                             fig.add_annotation(x=xs[j], y=labels[i], text=format(z[i, j], vfmt), showarrow=False,
-                                               font=dict(size=10.5, color="#140e20" if lvl > 0.6 else "#efeaf8"))
+                                               font=dict(size=10.5, color="#ffffff" if lvl > 0.6 else INK))
             for i, t in enumerate(hm.index):   # 冠軍那一列框起來
                 if (pl_season, t) in champ_ids:
                     fig.add_shape(type="rect", xref="x", yref="y", x0=-0.5, x1=len(xs) - 0.5, y0=i - 0.5, y1=i + 0.5,
@@ -1776,7 +1768,7 @@ if PAGE == "戰術使用":
             fig.update_yaxes(autorange="reversed", showgrid=False)
             fig.update_xaxes(showgrid=False, side="top")
             st.plotly_chart(style(fig, 90 + 30 * len(hm)), width="stretch")
-            st.caption("讀法：上面幾列是勝率最高的球隊。直著看一欄，如果亮色集中在上半部、暗色在下半部，"
+            st.caption("讀法：上面幾列是勝率最高的球隊。直著看一欄，如果深色集中在上半部、淺色在下半部，"
                        "代表這個戰術「打得好的隊伍比較會贏」。30 隊時格子裡不寫數字，把滑鼠移到格子上就能看到。")
 
         # ===== 奪冠方程式 =====
@@ -1805,7 +1797,7 @@ if PAGE == "戰術使用":
                 cs = corr[corr["side"] == side].sort_values("r_eff")
                 fig = go.Figure()
                 fig.add_trace(go.Bar(y=[PLAY_ZH.get(p, p) for p in cs["play_type"]], x=cs["r_use"], orientation="h",
-                                     name="使用率 和勝率的相關", marker_color="#5a5270",
+                                     name="使用率 和勝率的相關", marker_color="#c9c3d6",
                                      hovertemplate="%{y}：使用率相關 %{x:+.2f}<extra></extra>"))
                 fig.add_trace(go.Bar(y=[PLAY_ZH.get(p, p) for p in cs["play_type"]], x=cs["r_eff"], orientation="h",
                                      name="效率 和勝率的相關", marker_color=ACCENT,
@@ -1814,7 +1806,7 @@ if PAGE == "戰術使用":
                 for x0, txt in [(0.1, "弱"), (0.3, "中"), (0.5, "強")]:
                     fig.add_vline(x=x0, line=dict(color=GRID, width=1, dash="dot"))
                     fig.add_annotation(x=x0, y=1.0, yref="paper", yanchor="bottom", text=txt, showarrow=False,
-                                       font=dict(size=10, color="#8d86a3"))
+                                       font=dict(size=10, color=INK_2))
                 fig = style(fig, 90 + 38 * len(cs))
                 fig.update_layout(barmode="group", bargap=0.3)
                 fig.update_xaxes(range=[min(-0.3, cs[["r_eff", "r_use"]].min().min() - 0.05),
@@ -1893,7 +1885,7 @@ if PAGE == "戰術使用":
                 fig.add_trace(go.Scatter(x=c["ppp"], y=c["win_pct"], mode="markers+text", name="冠軍",
                                          marker=dict(size=13, symbol="star",
                                                      color=[TEAM_COLORS.get(a, ACCENT) for a in c["abbr"]],
-                                                     line=dict(width=1, color="#f4f0ff")),
+                                                     line=dict(width=1, color=SURFACE)),
                                          text=[f"{a} {s[2:]}" for a, s in zip(c["abbr"], c["season"])],
                                          textposition="top center", textfont=dict(size=11, color=INK),
                                          customdata=c[["abbr", "season"]].values,
@@ -1925,7 +1917,7 @@ if PAGE == "球季趨勢":
         fig.add_trace(go.Scatter(
             x=d["season"], y=d[metric], mode="lines+markers", name=team_label(abbr),
             line=dict(color=color, width=2.6 if (focus and lit) else (2 if lit else 1.2)),
-            marker=dict(size=7 if lit else 4, color=color, line=dict(width=1.5, color="#0b0910")),
+            marker=dict(size=7 if lit else 4, color=color, line=dict(width=1.5, color=SURFACE)),
             opacity=1 if lit else 0.55, showlegend=lit,
             customdata=d[["games", "wins"]].values,
             hovertemplate=f"<b>{team_label(abbr)}</b>　%{{y:{mfmt}}}"
@@ -1936,7 +1928,7 @@ if PAGE == "球季趨勢":
             fig.add_trace(go.Scatter(
                 x=c["season"], y=c[metric], mode="markers", showlegend=False, hoverinfo="skip",
                 marker=dict(symbol="star", size=20 if lit else 11, color=color,
-                            line=dict(width=1.5 if lit else 0, color="#f4f0ff")),
+                            line=dict(width=1.5 if lit else 0, color=SURFACE)),
             ))
         if lit:   # 線尾直接標上隊名，不用一直對照圖例
             last = d.iloc[-1]
@@ -1950,7 +1942,7 @@ if PAGE == "球季趨勢":
 
 # ---------- 2. 球隊 × 球季 熱力圖 ----------
 if PAGE == "球隊 × 球季":
-    section(f"{metric_name}：球隊 × 球季交叉表", "顏色越亮數值越高；★ 是奪冠球季；空白代表該季沒有這類比賽")
+    section(f"{metric_name}：球隊 × 球季交叉表", "顏色越深數值越高；★ 是奪冠球季；空白代表該季沒有這類比賽")
     pivot = team_season.pivot(index="abbreviation", columns="season", values=metric)
     pivot = pivot.reindex(index=[a for a in teams_sel if a in pivot.index], columns=seasons)
     z = pivot.values.astype(float)
@@ -1972,7 +1964,7 @@ if PAGE == "球隊 × 球季":
             star = "★<br>" if (season, abbr) in CHAMP_SET else ""
             fig.add_annotation(x=season, y=team_label(abbr), showarrow=False,
                                text=star + fmt(v, mfmt),
-                               font=dict(size=10.5, color="#140e20" if level > 0.6 else "#efeaf8"))
+                               font=dict(size=10.5, color="#ffffff" if level > 0.6 else INK))
     fig.update_yaxes(autorange="reversed", showgrid=False)
     # 一定要指定 type="category"：不然 Plotly 會把「2006-07」這種球季當成「2006 年 7 月」的日期，
     # 2012-13 以後（13 月不存在）就對不上位置，數字全部擠到最左邊
@@ -2062,7 +2054,7 @@ if PAGE == "球員":
                 fig.add_trace(go.Scatter(
                     x=d["season"], y=d[p_metric], mode="lines+markers", name=name, connectgaps=False,
                     line=dict(color=pc, width=2.2),
-                    marker=dict(size=8, color=pc, line=dict(width=1.5, color="#0b0910")),
+                    marker=dict(size=8, color=pc, line=dict(width=1.5, color=SURFACE)),
                     customdata=d[["gp"]].values,
                     hovertemplate=f"<b>{name}</b>　%{{y:{p_fmt}}}（出賽 %{{customdata[0]}} 場）<extra></extra>",
                 ))
@@ -2144,7 +2136,7 @@ if PAGE == "球員":
                     text=[n if n in top else "" for n in players["player_name"]],
                     textposition="top center", textfont=dict(size=12, color=INK),
                     marker=dict(size=12 + 26 * (players["pts"] / players["pts"].max()) ** 0.5,
-                                color=color, opacity=0.9, line=dict(width=1.5, color="#0b0910")),
+                                color=color, opacity=0.9, line=dict(width=1.5, color=SURFACE)),
                     customdata=players[["player_name", "gp", "ppg"]].values,
                     hovertemplate="<b>%{customdata[0]}</b><br>出賽 %{customdata[1]} 場｜場均 %{customdata[2]:.1f} 分"
                                   "<br>場均出手 %{x:.1f}｜TS% %{y:.1%}<extra></extra>",
@@ -2181,7 +2173,7 @@ if PAGE == "球員":
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(
                     x=g["game_date"], y=g["pts"], mode="markers", name="單場得分",
-                    marker=dict(size=8, color=color, opacity=0.4, line=dict(width=1, color="#0b0910")),
+                    marker=dict(size=8, color=color, opacity=0.4, line=dict(width=1, color=SURFACE)),
                     customdata=g[["matchup", "wl", "fgm", "fga", "fg3m", "fg3a"]].values,
                     hovertemplate="<b>%{x|%Y-%m-%d}</b>　%{customdata[0]}（%{customdata[1]}）<br>"
                                   "得分 %{y}｜投籃 %{customdata[2]}-%{customdata[3]}｜"
