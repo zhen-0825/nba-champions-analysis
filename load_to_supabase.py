@@ -209,6 +209,18 @@ def load_next(client, n):
     return ok
 
 
+def refresh_stats(client):
+    """寫完球員逐場數據後，叫資料庫重新計算「預先算好的彙總表」，網站才看得到新資料"""
+    if client is None:
+        return
+    try:
+        client.rpc("refresh_season_stats").execute()
+        print("  已更新彙總表（team_season_stats_mv、player_season_stats_mv）")
+    except Exception as e:
+        print(f"  彙總表沒有更新：{type(e).__name__}。如果還沒執行 docs/sql/2026-10-30_預先算好的彙總表.sql，"
+              "請先到 Supabase SQL Editor 執行；網站會暫時改讀原本的檢視表。")
+
+
 def show_progress():
     added = read_added()
     queue = team_queue()
@@ -324,10 +336,12 @@ def main():
     load_reference(client)
     if args.next:
         ok = load_next(client, args.next)
+        refresh_stats(client)
         print(f"\n全部完成！（{datetime.now():%Y-%m-%d %H:%M}）")
         raise SystemExit(0 if ok else 1)
     if args.only != "league":
         load_players(client, args.teams, args.start, args.end)
+        refresh_stats(client)
     if args.only != "players":
         load_league(client, args.start, args.end)
 

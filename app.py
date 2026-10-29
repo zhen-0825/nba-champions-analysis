@@ -374,9 +374,20 @@ def fetch_all(table, order_cols, page=1000):
 
 
 @st.cache_data(ttl=900, show_spinner="從資料庫讀取資料中…")   # 每 15 分鐘重新讀一次資料庫
+def read_stats(name, order_cols):
+    """先讀「預先算好的彙總表」（_mv，很快）；還沒建立的話，退回原本的檢視表（比較慢）"""
+    try:
+        df = fetch_all(f"{name}_mv", order_cols)
+        if not df.empty:
+            return df
+    except Exception:
+        pass
+    return fetch_all(name, order_cols)
+
+
 def load_data():
-    team = fetch_all("team_season_stats", ["team_id", "season", "season_type"])
-    players = fetch_all("player_season_stats", ["team_id", "season", "season_type", "player_id"])
+    team = read_stats("team_season_stats", ["team_id", "season", "season_type"])
+    players = read_stats("player_season_stats", ["team_id", "season", "season_type", "player_id"])
     champs = fetch_all("champions", ["season"])
     teams = fetch_all("teams", ["team_id"])
     champs = champs.merge(teams[["team_id", "abbreviation"]], on="team_id")
