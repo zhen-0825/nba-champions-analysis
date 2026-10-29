@@ -20,7 +20,7 @@ import streamlit as st
 # =====================================================================
 TEAM_ZH = {"GSW": "勇士", "DEN": "金塊", "BOS": "塞爾提克", "OKC": "雷霆", "NYK": "尼克",
            "MIL": "公鹿", "LAL": "湖人", "TOR": "暴龍"}
-# 其他 22 隊（每天慢慢載入球員逐場數據；載入後會出現在左側球隊選單，預設不勾選）
+# 其他 22 隊（每天慢慢載入球員逐場數據；載入後會出現在篩選列的球隊選項，預設不勾選）
 OTHER_ZH = {"SAS": "馬刺", "DAL": "獨行俠", "MIA": "熱火", "CLE": "騎士", "ATL": "老鷹", "BKN": "籃網",
             "CHA": "黃蜂", "CHI": "公牛", "DET": "活塞", "HOU": "火箭", "IND": "溜馬", "LAC": "快艇",
             "MEM": "灰熊", "MIN": "灰狼", "NOP": "鵜鶘", "ORL": "魔術", "PHI": "七六人", "PHX": "太陽",
@@ -175,6 +175,40 @@ section[data-testid="stSidebar"] [data-testid="stWidgetLabel"] p { font-size: 0.
 .ntable .bar { display: inline-block; height: 6px; flex: 0 0 auto; border-radius: 3px;
                background: linear-gradient(90deg, #6d28d9, #a78bfa); opacity: 0.8; }
 .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px; position: relative; top: -1px; }
+/* ===== 導覽（左側頁面選單，參考 YouTube）===== */
+.brand { font-family: 'Noto Serif TC', serif; font-size: 1.25rem; font-weight: 900; color: #f4f0ff;
+         letter-spacing: 0.06em; margin: 0 0 14px 6px; }
+.nav-group { font-size: 0.72rem; letter-spacing: 0.22em; color: #8d86a3; margin: 18px 0 4px 10px; }
+section[data-testid="stSidebar"] .stButton > button {
+  justify-content: flex-start; text-align: left; border-radius: 10px; padding: 0.5rem 0.9rem;
+  border: 1px solid transparent; background: transparent; color: #cfc7e6; box-shadow: none; transform: none; }
+section[data-testid="stSidebar"] .stButton > button:hover {
+  background: rgba(167,139,250,0.10); border-color: transparent; box-shadow: none; transform: none; }
+section[data-testid="stSidebar"] [data-testid="stBaseButton-primary"] {
+  background: rgba(124,58,237,0.28) !important; color: #f4f0ff !important; font-weight: 700;
+  border-left: 3px solid #a78bfa !important; }
+section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] { gap: 0.25rem; }
+
+/* ===== 各頁的細長頁首（麵包屑＋標題＋這頁的問題）===== */
+.pagehead { border-bottom: 1px solid rgba(167,139,250,0.16); padding: 2px 0 14px 0; margin-bottom: 14px; }
+.pagehead .crumb { font-size: 0.74rem; letter-spacing: 0.18em; color: #8d86a3; }
+.pagehead h2 { font-family: 'Noto Serif TC', serif; font-weight: 900; color: #f4f0ff; font-size: 1.9rem;
+               margin: 4px 0 2px 0; padding: 0; }
+.pagehead .pq { color: #b7a4f5; font-size: 1rem; }
+
+/* ===== 首頁卡片牆（參考 YouTube 影片卡）===== */
+.home-group { font-family: 'Noto Serif TC', serif; font-size: 1.15rem; font-weight: 700; color: #efeaff;
+              margin: 26px 0 10px 0; letter-spacing: 0.05em; }
+.card { position: relative; border: 1px solid rgba(167,139,250,0.18); border-radius: 16px; overflow: hidden;
+        background: linear-gradient(180deg, rgba(30,22,48,0.85), rgba(15,11,23,0.85));
+        padding: 18px 20px 16px 20px; min-height: 178px; margin-bottom: 8px; transition: border-color 0.15s ease; }
+.card:hover { border-color: #a78bfa; }
+.card::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 3px;
+                background: linear-gradient(90deg, #6d28d9, #a78bfa, transparent); }
+.card-num { font-family: 'Noto Serif TC', serif; font-size: 0.85rem; color: #8d7fc0; letter-spacing: 0.2em; }
+.card-title { font-family: 'Noto Serif TC', serif; font-size: 1.3rem; font-weight: 900; color: #f4f0ff; margin-top: 6px; }
+.card-q { color: #c8b6f8; font-size: 0.95rem; margin-top: 2px; }
+.card-desc { color: #8d86a3; font-size: 0.84rem; line-height: 1.6; margin-top: 10px; }
 .footnote { color: #6f6883; font-size: 0.78rem; text-align: center; margin-top: 36px; letter-spacing: 0.08em; }
 </style>
 """, unsafe_allow_html=True)
@@ -479,20 +513,59 @@ P_COLS = ["gp", "min", "pts", "fgm", "fga", "fg3m", "fg3a", "ftm", "fta", "reb",
 
 
 # =====================================================================
-# 左側：查詢條件
+# 導覽：左側像 YouTube 一樣是「頁面選單」，篩選條件移到各頁上方
 # =====================================================================
+# （群組, 頁面名稱, 這頁回答的問題, 卡片說明, 這頁要用到哪些篩選）
+PAGES = [
+    ("冠軍故事", "冠軍密碼", "奪冠最需要什麼？",
+     "冠軍在攻守效率、三分、籃板等 10 項指標排聯盟第幾；三分時代與冠軍輪替。", {"season"}),
+    ("冠軍故事", "投籃分布", "冠軍從哪裡出手？",
+     "半場球場圖：奪冠那季的出手位置，和聯盟平均、和自己其他球季比較。", set()),
+    ("冠軍故事", "戰術使用", "冠軍靠什麼戰術得分？",
+     "戰術地圖、八位冠軍的共同點、全聯盟各隊比較與奪冠方程式。", set()),
+    ("自由探索", "球季趨勢", "各隊一路怎麼變化？",
+     "選一個指標，看各隊 20 季的折線；可聚焦幾支球隊，其他變灰。", {"team", "season", "type", "metric"}),
+    ("自由探索", "球隊 × 球季", "哪隊在哪季特別突出？",
+     "熱力圖一次看完所有球隊、所有球季，越亮越高，★ 是奪冠季。", {"team", "season", "type", "metric"}),
+    ("自由探索", "冠軍球季比較", "奪冠那季比平常強多少？",
+     "每支冠軍隊的奪冠球季，和它其他球季的平均差多少。", {"team", "season", "type", "metric"}),
+    ("資料", "球員", "誰是冠軍的關鍵球員？",
+     "球員在隊上的逐季變化、出手量 vs 效率、單季逐場數據。", {"team", "season", "type"}),
+    ("資料", "數據表", "原始數字與下載",
+     "球隊 × 球季的完整數字，可以排序、下載 Excel。", {"team", "season", "type"}),
+]
+PAGE_INFO = {p[1]: p for p in PAGES}
+HOME = "首頁"
+
+
+def goto(page):
+    """切換頁面（按鈕的 on_click 會呼叫這裡）"""
+    st.session_state["page"] = page
+    try:
+        st.query_params["page"] = page      # 網址也跟著變，可以直接分享某一頁
+    except Exception:
+        pass
+
+
+if "page" not in st.session_state:          # 第一次打開：看網址有沒有指定頁面
+    try:
+        q = st.query_params.get("page")
+    except Exception:
+        q = None
+    st.session_state["page"] = q if q in PAGE_INFO else HOME
+if st.session_state["page"] not in PAGE_INFO:   # 舊網址或改過名字的頁面，一律回首頁
+    st.session_state["page"] = HOME
+PAGE = st.session_state["page"]
+
 with st.sidebar:
-    st.markdown("### 查詢條件")
-    teams_sel = pills("球隊", ALL_TEAMS + EXTRA_TEAMS, "teams", default=ALL_TEAMS, multi=True,
-                      format_func=team_label)
-    if EXTRA_TEAMS:
-        st.caption(f"八支冠軍隊預設勾選；另外已載入 {len(EXTRA_TEAMS)} 隊，點一下就能加入比較"
-                   f"（還有 {30 - len(ALL_TEAMS) - len(EXTRA_TEAMS)} 隊每天陸續載入中）。")
-    s_from, s_to = st.select_slider("球季範圍", ALL_SEASONS,
-                                    value=(ALL_SEASONS[0], ALL_SEASONS[-1]))
-    types_sel = pills("比賽類型", list(TYPE_OPTIONS), "types", default=["例行賽"], multi=True)
-    st.caption("跨球季比較建議只看例行賽：每隊每季約 82 場，比較公平。")
-    metric_name = pills("球隊比較指標", list(METRICS), "metric", default=list(METRICS)[0])
+    st.markdown('<div class="brand">NBA 冠軍分析</div>', unsafe_allow_html=True)
+    st.button("首頁", key="nav_home", width="stretch", on_click=goto, args=(HOME,),
+              type="primary" if PAGE == HOME else "secondary")
+    for grp in dict.fromkeys(p[0] for p in PAGES):     # 依序列出三個群組
+        st.markdown(f'<div class="nav-group">{grp}</div>', unsafe_allow_html=True)
+        for _, name, *_ in [p for p in PAGES if p[0] == grp]:
+            st.button(name, key=f"nav_{name}", width="stretch", on_click=goto, args=(name,),
+                      type="primary" if PAGE == name else "secondary")
     st.divider()
     if st.button("重新讀取最新資料", width="stretch",
                  help="網站每 15 分鐘會自動重讀資料庫；剛更新完資料想馬上看到，就按這裡"):
@@ -500,6 +573,70 @@ with st.sidebar:
         st.rerun()
     st.caption(f"資料更新至：{latest_game_date() or '未知'}\n\n"
                "資料來源：NBA 官方數據（nba_api）→ Supabase 資料庫\n\n★ 代表該隊奪冠的球季")
+
+
+# =====================================================================
+# 頁首：首頁是大標題＋數字卡；其他頁是細長的「麵包屑＋標題＋這頁的問題」
+# =====================================================================
+if PAGE == HOME:
+    st.markdown(f"""
+<div class="hero">
+  <div class="hero-kicker">NBA CHAMPIONSHIP ANALYTICS</div>
+  <h1>NBA 冠軍球隊數據分析</h1>
+  <div class="hero-sub">2019–2026 八屆冠軍，近二十年的數據軌跡：冠軍的關鍵是什麼？</div>
+  <span class="chip">{ALL_SEASONS[0]} – {ALL_SEASONS[-1]}</span>
+  <span class="chip">資料更新至 {latest_game_date() or '未知'}</span>
+  <span class="chip">資料庫已有 {len(ALL_TEAMS) + len(EXTRA_TEAMS)} / 30 隊</span>
+</div>
+""", unsafe_allow_html=True)
+else:
+    grp, name, question, *_ = PAGE_INFO[PAGE]
+    st.markdown(f'<div class="pagehead"><div class="crumb">{grp}　／　{name}</div>'
+                f'<h2>{name}</h2><div class="pq">{question}</div></div>', unsafe_allow_html=True)
+
+
+# =====================================================================
+# 篩選列：只在「需要」的頁面出現，而且只顯示這頁用得到的條件
+# 換頁時條件會記住（存在 st.session_state 的 keep_ 開頭變數）
+# =====================================================================
+NEED = PAGE_INFO[PAGE][4] if PAGE in PAGE_INFO else set()
+keep = st.session_state
+teams_sel = keep.get("keep_teams", ALL_TEAMS)
+s_from, s_to = keep.get("keep_range", (ALL_SEASONS[0], ALL_SEASONS[-1]))
+types_sel = keep.get("keep_types", ["例行賽"])
+metric_name = keep.get("keep_metric", list(METRICS)[0])
+teams_sel = [a for a in teams_sel if a in ALL_TEAMS + EXTRA_TEAMS] or ALL_TEAMS
+types_sel = [x for x in types_sel if x in TYPE_OPTIONS] or ["例行賽"]
+metric_name = metric_name if metric_name in METRICS else list(METRICS)[0]
+if s_from not in ALL_SEASONS or s_to not in ALL_SEASONS:
+    s_from, s_to = ALL_SEASONS[0], ALL_SEASONS[-1]
+
+if NEED:
+    try:
+        bar = st.container(border=True)
+    except TypeError:
+        bar = st.container()
+    with bar:
+        if "team" in NEED:
+            teams_sel = pills("球隊", ALL_TEAMS + EXTRA_TEAMS, "w_teams", default=teams_sel, multi=True,
+                              format_func=team_label)
+            if EXTRA_TEAMS:
+                st.caption(f"八支冠軍隊預設勾選；另外已載入 {len(EXTRA_TEAMS)} 隊，點一下就能加入比較"
+                           f"（還有 {30 - len(ALL_TEAMS) - len(EXTRA_TEAMS)} 隊每天陸續載入中）。")
+        f1, f2, f3 = st.columns([3, 2, 4])
+        if "season" in NEED:
+            with f1:
+                s_from, s_to = st.select_slider("球季範圍", ALL_SEASONS, value=(s_from, s_to), key="w_range")
+        if "type" in NEED:
+            with f2:
+                types_sel = pills("比賽類型", list(TYPE_OPTIONS), "w_types", default=types_sel, multi=True)
+        if "metric" in NEED:
+            with f3:
+                metric_name = pills("比較指標", list(METRICS), "w_metric", default=metric_name)
+        if "type" in NEED:
+            st.caption("跨球季比較建議只看例行賽：每隊每季約 82 場，比較公平。")
+    keep["keep_teams"], keep["keep_range"] = teams_sel, (s_from, s_to)
+    keep["keep_types"], keep["keep_metric"] = types_sel, metric_name
 
 if not teams_sel or not types_sel:
     st.warning("請至少選擇一支球隊和一種比賽類型")
@@ -524,29 +661,30 @@ if team_season.empty:
 
 
 # =====================================================================
-# 頁首
+# 首頁：像 YouTube 首頁一樣的卡片牆，一張卡＝一個研究問題
 # =====================================================================
-chips = "".join(f'<span class="chip">{team_label(a)}</span>' for a in teams_sel)
-st.markdown(f"""
-<div class="hero">
-  <div class="hero-kicker">NBA CHAMPIONSHIP ANALYTICS</div>
-  <h1>NBA 冠軍球隊數據分析</h1>
-  <div class="hero-sub">2019–2026 八屆冠軍，近二十年的數據軌跡</div>
-  <span class="chip">{s_from} – {s_to}</span>
-  <span class="chip">資料更新至 {latest_game_date() or '未知'}</span>
-  <span class="chip">{'・'.join(types_sel)}</span>{chips}
-</div>
-""", unsafe_allow_html=True)
-
-k1, k2, k3, k4 = st.columns(4)
-kpi(k1, "球隊", f"{len(teams_sel)} 隊", f"資料庫已有 {len(ALL_TEAMS) + len(EXTRA_TEAMS)} / 30 隊")
-kpi(k2, "球季", f"{len(seasons)} 季", f"{s_from} ～ {s_to}")
-kpi(k3, "比賽場數", f"{int(team_season['games'].sum()):,}", "所選球隊、球季、比賽類型合計")
-kpi(k4, "範圍內奪冠球季", f"{int(team_season['champion'].sum())} 次", "圖上以 ★ 標示")
-st.write("")
-
-tab0, tab_shot, tab_play, tab1, tab2, tab3, tab4, tab5 = st.tabs(
-    ["冠軍密碼", "投籃分布", "戰術使用", "球季趨勢", "球隊 × 球季", "冠軍球季比較", "球員", "數據表"])
+if PAGE == HOME:
+    home = team_raw[team_raw["abbreviation"].isin(ALL_TEAMS) & (team_raw["season_type"] == "Regular Season")]
+    n_titles = sum(1 for s_, a_ in CHAMP_SET if a_ in ALL_TEAMS and s_ in set(ALL_SEASONS))
+    k1, k2, k3, k4 = st.columns(4)
+    kpi(k1, "冠軍隊", f"{len(ALL_TEAMS)} 隊", f"另有 {len(EXTRA_TEAMS)} 隊可加入比較")
+    kpi(k2, "球季", f"{len(ALL_SEASONS)} 季", f"{ALL_SEASONS[0]} ～ {ALL_SEASONS[-1]}")
+    kpi(k3, "比賽場數", f"{int(pd.to_numeric(home['games'], errors='coerce').sum()):,}", "八支冠軍隊的例行賽合計")
+    kpi(k4, "奪冠球季", f"{n_titles} 次", f"八隊在這 {len(ALL_SEASONS)} 季拿下的冠軍")
+    for grp in dict.fromkeys(p[0] for p in PAGES):
+        st.markdown(f'<div class="home-group">{grp}</div>', unsafe_allow_html=True)
+        items = [p for p in PAGES if p[0] == grp]
+        cols = st.columns(3, gap="medium")
+        for i, (_, name, question, desc, _) in enumerate(items):
+            n = PAGES.index(PAGE_INFO[name]) + 1
+            with cols[i % 3]:
+                st.markdown(f'<div class="card"><div class="card-num">{n:02d}</div>'
+                            f'<div class="card-title">{name}</div><div class="card-q">{question}</div>'
+                            f'<div class="card-desc">{desc}</div></div>', unsafe_allow_html=True)
+                st.button(f"前往「{name}」", key=f"card_{name}", width="stretch", on_click=goto, args=(name,))
+    st.markdown('<div class="footnote">DATA · NBA STATS API　｜　STORAGE · SUPABASE　｜　BUILT WITH STREAMLIT</div>',
+                unsafe_allow_html=True)
+    st.stop()
 
 
 # ---------- 0. 冠軍密碼：三個問題 ----------
@@ -575,7 +713,7 @@ def insight(lines):
     st.markdown('<div class="insight">' + "<br>".join(lines) + "</div>", unsafe_allow_html=True)
 
 
-with tab0:
+if PAGE == "冠軍密碼":
     if league.empty:
         st.info("資料庫裡還沒有全聯盟數據，請先執行：python load_to_supabase.py --only league")
     else:
@@ -598,10 +736,10 @@ with tab0:
         q_seasons = sorted(LG["season"].unique())
 
         if CH.empty:
-            st.info("球季範圍內沒有已完成的冠軍球季，請把左側球季範圍拉大。")
+            st.info("球季範圍內沒有已完成的冠軍球季，請把上方球季範圍拉大。")
         else:
             st.caption(f"以下三題都用全聯盟 30 隊的例行賽數據（{q_seasons[0]}～{q_seasons[-1]}，"
-                       f"共 {len(CH)} 位冠軍）；左側的球隊與比賽類型篩選不影響這一頁。")
+                       f"共 {len(CH)} 位冠軍）；這一頁只受上方「球季範圍」影響。")
 
             # ===== Q1 =====
             section("Q1　奪冠的最佳因素是什麼？",
@@ -856,7 +994,7 @@ def shots_to_zone_rows(s):
     return s[["zone_basic", "zone_area", "fga", "fgm", "x", "y"]]
 
 
-with tab_shot:
+if PAGE == "投籃分布":
     section("冠軍從哪裡出手？",
             "問題：奪冠那一季的出手位置，和聯盟平均、和自己其他球季有什麼不同？　"
             "假設：冠軍會把出手集中在「禁區籃下＋三分」這兩個每次出手得分最高的地方，少投中距離")
@@ -1357,7 +1495,7 @@ def playtype_league(pt):
     return g.drop(columns=["lg_pts", "lg_poss", "lg_ppp_mean"])
 
 
-with tab_play:
+if PAGE == "戰術使用":
     section("冠軍靠什麼戰術得分？",
             "問題：冠軍隊的進攻是「某種戰術用得特別多」，還是「同樣的戰術打得特別有效率」？　"
             "假設：冠軍的戰術比例和聯盟差不多，真正拉開差距的是每回合得分（效率）")
@@ -1772,7 +1910,7 @@ with tab_play:
 
 
 # ---------- 1. 球季趨勢 ----------
-with tab1:
+if PAGE == "球季趨勢":
     section(f"{metric_name}：各隊逐季變化", "★ 是該隊奪冠的球季；選擇聚焦球隊，其他球隊會變成灰色背景，線條就不會互相干擾")
     focus = pills("聚焦球隊（可多選，不選＝全部上色）", teams_sel, "focus", default=[], multi=True,
                   format_func=team_label)
@@ -1811,7 +1949,7 @@ with tab1:
 
 
 # ---------- 2. 球隊 × 球季 熱力圖 ----------
-with tab2:
+if PAGE == "球隊 × 球季":
     section(f"{metric_name}：球隊 × 球季交叉表", "顏色越亮數值越高；★ 是奪冠球季；空白代表該季沒有這類比賽")
     pivot = team_season.pivot(index="abbreviation", columns="season", values=metric)
     pivot = pivot.reindex(index=[a for a in teams_sel if a in pivot.index], columns=seasons)
@@ -1843,7 +1981,7 @@ with tab2:
 
 
 # ---------- 3. 冠軍球季比較 ----------
-with tab3:
+if PAGE == "冠軍球季比較":
     champ_rows = team_season[team_season["champion"]].copy()
     if champ_rows.empty:
         st.info("目前的球隊與球季範圍內沒有奪冠球季。")
@@ -1881,7 +2019,7 @@ with tab3:
 
 
 # ---------- 4. 球員 ----------
-with tab4:
+if PAGE == "球員":
     c1, c2 = st.columns([1, 2])
     p_team = c1.selectbox("球隊", teams_sel, format_func=team_label, key="p_team")
     with c2:
@@ -2060,7 +2198,7 @@ with tab4:
 
 
 # ---------- 5. 數據表 ----------
-with tab5:
+if PAGE == "數據表":
     section("球隊 × 球季 數據表", "可點欄位名稱排序；★ 為奪冠球季")
     table = team_season.copy()
     table["球隊"] = table["abbreviation"].map(team_label)
