@@ -1139,17 +1139,26 @@ if PAGE == "投籃分布":
             color = TEAM_COLORS.get(sh_team, ACCENT)
 
             # ---- 球場圖 ----
-            def court_axes(fig, height=500):
-                """把圖變成半場球場：畫線、隱藏座標軸、長寬等比例"""
+            def court_top(*ys, pad=30):
+                """球場往上畫到哪裡：最遠的出手再多留一點邊就好，沒人投籃的地方不要留白"""
+                vals = [pd.to_numeric(pd.Series(y if hasattr(y, "__len__") else [y]), errors="coerce").dropna()
+                        for y in ys if y is not None]   # 可以傳一整欄，也可以傳單一個數字
+                vals = [v for v in vals if len(v)]
+                if not vals:
+                    return 300
+                return float(min(330, max(250, max(v.max() for v in vals) + pad)))
+
+            def court_axes(fig, top=330):
+                """把圖變成半場球場：畫線、隱藏座標軸、長寬等比例；高度跟著 top 縮，上方不留大片空白"""
                 fig.update_layout(shapes=court_shapes())
                 fig.update_xaxes(range=[-255, 255], visible=False, fixedrange=True, constrain="domain")
-                fig.update_yaxes(range=[-55, 330], visible=False, fixedrange=True, constrain="domain",
+                fig.update_yaxes(range=[-55, top], visible=False, fixedrange=True, constrain="domain",
                                  scaleanchor="x", scaleratio=1)
-                fig = style(fig, height)
+                fig = style(fig, int(16 + 560 * (top + 55) / 510))   # 依球場的長寬比算高度（以半版寬約 560 像素估）
                 fig.update_layout(legend=dict(y=-0.02))
                 return fig
 
-            def points_fig(df):
+            def points_fig(df, top=None):
                 """每一次出手畫成一個點：投進＝球隊色圓點、沒進＝灰色 ×"""
                 fig = go.Figure()
                 made = df["made"].astype(bool)
@@ -1161,7 +1170,8 @@ if PAGE == "投籃分布":
                         x=d["loc_x"], y=d["loc_y"], mode="markers", name=name, marker=mk,
                         customdata=d[["player_name", "shot_distance"]].values,
                         hovertemplate="%{customdata[0]}　%{customdata[1]} 英尺<extra>" + name + "</extra>"))
-                return court_axes(fig)
+                # 超遠的零星出手（例如半場球）不納入，取 99% 的出手都看得到的高度
+                return court_axes(fig, top or court_top(df["loc_y"].quantile(0.99) if len(df) else None, pad=15))
 
             def shot_summary(df):
                 """圖上方的一行摘要：出手數、命中率、三分出手比例"""
@@ -1175,7 +1185,7 @@ if PAGE == "投籃分布":
             a_short = sh_season + ("★" if (sh_season, sh_team) in CHAMP_SET else "")
             b_short = "聯盟" if vs == "聯盟平均" else (sh_season_b + ("★" if (sh_season_b, sh_team) in CHAMP_SET else ""))
 
-            def zone_fig(za_, zb_, colored=True, colorbar=True, ref_label=None):
+            def zone_fig(za_, zb_, colored=True, colorbar=True, ref_label=None, top=None):
                 """分區命中率球場圖：圈的大小＝出手佔比、圈內數字＝命中率；colored=True 時顏色＝和對照組的命中率差"""
                 zm = za_.copy()
                 if colored and zb_ is not None and not zb_.empty:
@@ -1203,7 +1213,7 @@ if PAGE == "投籃分布":
                                   + ("｜" + (ref_label or b_label) + " %{customdata[4]:.1%}<br>差距 %{customdata[5]:+.1f} 百分點"
                                      if colored else "")
                                   + "<br>每次出手 %{customdata[6]:.2f} 分<extra></extra>", showlegend=False))
-                return court_axes(f)
+                return court_axes(f, top or court_top(zm["y"]))
 
             # 樣本太少時先提醒：剛開打的球季、出手很少的球員，命中率會忽高忽低
             few_a = len(shots_a) < 300
@@ -1219,10 +1229,11 @@ if PAGE == "投籃分布":
             if two_up:
                 ca, cb = st.columns(2, gap="large")
                 if view == "每一次出手":
+                    top2 = court_top(shots_a["loc_y"].quantile(0.99), shots_b["loc_y"].quantile(0.99), pad=15)
                     for c_, df_, lab in [(ca, shots_a, a_label), (cb, shots_b, b_label)]:
                         with c_:
                             section(f"{lab} 出手位置", shot_summary(df_))
-                            st.plotly_chart(points_fig(df_), width="stretch")
+                            st.plotly_chart(points_fig(df_, top=top2), width="stretch")
                     st.caption("兩張圖用同一套顏色和比例：彩色＝投進、灰色 × ＝沒進。"
                                "比一比哪一區的點變多變少（出手選擇的改變）、哪一區彩色點變多（命中區的改變）。")
                 else:
@@ -1235,13 +1246,14 @@ if PAGE == "投籃分布":
                             if not zl_all.empty else pd.DataFrame()
                         return zone_table(z_) if not z_.empty else None
 
+                    top2 = court_top(za["y"], zb["y"])   # 兩張圖同一個高度，左右才對得齊
                     for c_, z_, df_, lab, sea_ in [(ca, za, shots_a, a_label, sh_season),
                                                    (cb, zb, shots_b, b_label, sh_season_b)]:
                         with c_:
                             ref = league_zone(sea_)
                             section(lab, shot_summary(df_))
                             st.plotly_chart(zone_fig(z_, ref, colored=ref is not None, colorbar=False,
-                                                     ref_label=f"{sea_} 聯盟平均"), width="stretch")
+                                                     ref_label=f"{sea_} 聯盟平均", top=top2), width="stretch")
                     st.markdown('<div class="legend-row"><span class="sw" style="background:#7c3aed"></span>比當季聯盟平均準'
                                 '<span class="sw" style="background:#ece9f2;border:1px solid #d9d3e6"></span>和聯盟差不多'
                                 '<span class="sw" style="background:#3d74c9"></span>比聯盟不準'
@@ -1519,8 +1531,10 @@ if PAGE == "投籃分布":
                             ps["wx"], ps["wy"] = ps["ax"] * ps["w"], ps["ay"] * ps["w"]
                             pg = ps.groupby(["zone_basic", "zone_area"])[["wx", "wy", "w"]].sum()
                             POS = {k: (r["wx"] / r["w"], r["wy"] / r["w"]) for k, r in pg.iterrows() if r["w"]}
+                            small_top = min(330, max(250, max((v[1] for v in POS.values()), default=270) + 30))
                         else:
                             POS = {}
+                            small_top = 300
                         fine = zt[(zt["season_type"] == sh_type) & zt["zone_basic"].isin(ZONE_ZH)].copy()
                         for c in ["fga", "fgm"]:
                             fine[c] = pd.to_numeric(fine[c], errors="coerce")
@@ -1555,13 +1569,13 @@ if PAGE == "投籃分布":
                                               "<extra></extra>", showlegend=False))
                             fig.update_layout(shapes=court_shapes())
                             fig.update_xaxes(range=[-255, 255], visible=False, fixedrange=True, constrain="domain")
-                            fig.update_yaxes(range=[-55, 330], visible=False, fixedrange=True, constrain="domain",
+                            fig.update_yaxes(range=[-55, small_top], visible=False, fixedrange=True, constrain="domain",
                                              scaleanchor="x", scaleratio=1)   # 每張小球場比例、大小都一樣
                             star = " ★" if s in champ_cols else ""
                             c_.markdown(f'<div class="section-sub" style="margin-left:0;text-align:center">'
                                         f'<b style="color:#1a1426">{s}{star}</b>　出手 {int(f["fga"].sum()):,}</div>',
                                         unsafe_allow_html=True)
-                            fig = style(fig, 280)
+                            fig = style(fig, int(10 + 300 * (small_top + 55) / 510))
                             fig.update_layout(margin=dict(l=0, r=0, t=0, b=0))
                             c_.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
                         st.caption("每個小球場同一套規則：圈越大＝那季在這區出手越多；紫色＝比同季聯盟準、藍色＝比較不準。"
