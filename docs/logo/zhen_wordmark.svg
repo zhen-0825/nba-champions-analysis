@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="48" viewBox="0 0 200 48">
+  <defs>
+    <linearGradient id="zg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#c4b5fd"/>
+      <stop offset="1" stop-color="#7c3aed"/>
+    </linearGradient>
+  </defs>
+  <rect x="0.5" y="4.5" width="39" height="39" rx="10" fill="#0d0a14" stroke="#7c3aed" stroke-opacity="0.7"/>
+  <path d="M11 15.5 H28.5 L11.5 31.5 L17 31.5 L21.5 27.5 L25 30 L29.5 25"
+        fill="none" stroke="url(#zg)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="29.5" cy="25" r="2.4" fill="#f4f0ff"/>
+  <text x="52" y="31" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="24" font-weight="800"
+        letter-spacing="0.5"><tspan fill="#a78bfa">Z</tspan><tspan fill="#f4f0ff">he</tspan><tspan fill="#a78bfa">N</tspan></text>
+  <text x="53" y="43" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="8.5" font-weight="600"
+        letter-spacing="2.2" fill="#8d86a3">DATA · BASKETBALL</text>
+</svg>
