@@ -151,6 +151,12 @@ section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] { gap: 0.2rem; 
           border-radius: 4px; padding: 0 7px; margin-right: 10px; line-height: 1.7; }
 .hypo div:nth-child(2) .hypo-k { background: var(--brand); }
 
+/* ===== 圖例列（多張圖共用一個圖例）===== */
+.legend-row { font-size: 0.85rem; color: var(--ink-2); margin: -4px 0 12px 0; display: flex; align-items: center;
+              flex-wrap: wrap; gap: 6px 14px; }
+.legend-row .sw { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+.legend-row .lg-note { color: var(--muted); }
+
 /* ===== 數字卡 ===== */
 .kpi { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; height: 100%; }
 .kpi-label { font-size: 0.8rem; color: var(--ink-2); font-weight: 500; }
@@ -1169,7 +1175,7 @@ if PAGE == "投籃分布":
             a_short = sh_season + ("★" if (sh_season, sh_team) in CHAMP_SET else "")
             b_short = "聯盟" if vs == "聯盟平均" else (sh_season_b + ("★" if (sh_season_b, sh_team) in CHAMP_SET else ""))
 
-            def zone_fig(za_, zb_, colored=True):
+            def zone_fig(za_, zb_, colored=True, colorbar=True, ref_label=None):
                 """分區命中率球場圖：圈的大小＝出手佔比、圈內數字＝命中率；colored=True 時顏色＝和對照組的命中率差"""
                 zm = za_.copy()
                 if colored and zb_ is not None and not zb_.empty:
@@ -1183,6 +1189,7 @@ if PAGE == "投籃分布":
                 if colored:
                     marker.update(color=zm["diff"].fillna(0), cmin=-8, cmax=8,
                                   colorscale=[[0, "#3d74c9"], [0.5, "#ece9f2"], [1, "#7c3aed"]],
+                                  showscale=colorbar,
                                   colorbar=dict(title=dict(text="命中率差<br>（百分點）", font=dict(size=11, color=INK_2)),
                                                 thickness=10, outlinewidth=0, len=0.6, tickfont=dict(color=INK_2)))
                 else:
@@ -1193,7 +1200,8 @@ if PAGE == "投籃分布":
                     customdata=zm[["name", "fga", "share", "fg_pct", "fg_pct_b", "diff", "pps"]].values,
                     hovertemplate="<b>%{customdata[0]}</b><br>出手 %{customdata[1]:,} 次（佔 %{customdata[2]:.1%}）"
                                   "<br>命中率 %{customdata[3]:.1%}"
-                                  + ("｜" + b_label + " %{customdata[4]:.1%}<br>差距 %{customdata[5]:+.1f} 百分點" if colored else "")
+                                  + ("｜" + (ref_label or b_label) + " %{customdata[4]:.1%}<br>差距 %{customdata[5]:+.1f} 百分點"
+                                     if colored else "")
                                   + "<br>每次出手 %{customdata[6]:.2f} 分<extra></extra>", showlegend=False))
                 return court_axes(f)
 
@@ -1218,14 +1226,27 @@ if PAGE == "投籃分布":
                     st.caption("兩張圖用同一套顏色和比例：彩色＝投進、灰色 × ＝沒進。"
                                "比一比哪一區的點變多變少（出手選擇的改變）、哪一區彩色點變多（命中區的改變）。")
                 else:
-                    with ca:
-                        section(f"{a_label}", f"{shot_summary(shots_a)}｜顏色＝比右邊那一季準（紫）或不準（藍）")
-                        st.plotly_chart(zone_fig(za, zb, colored=True), width="stretch")
-                    with cb:
-                        section(f"{b_label}（對照）", shot_summary(shots_b))
-                        st.plotly_chart(zone_fig(zb, None, colored=False), width="stretch")
-                    st.caption("兩張球場圖用同一個比例：圈越大＝那一區出手越多，圈內數字＝命中率。"
-                               "左右對照看：圈變大變小＝出手選擇改變；數字變高變低＝準度改變。")
+                    # 兩張圖用「完全一樣」的畫法：顏色都和「自己那一季的聯盟平均」比，
+                    # 這樣左右兩張的紫、藍代表同一件事，可以直接對照
+                    zl_all = load_zone_league()
+
+                    def league_zone(season_):
+                        z_ = zl_all[(zl_all["season"] == season_) & (zl_all["season_type"] == sh_type)] \
+                            if not zl_all.empty else pd.DataFrame()
+                        return zone_table(z_) if not z_.empty else None
+
+                    for c_, z_, df_, lab, sea_ in [(ca, za, shots_a, a_label, sh_season),
+                                                   (cb, zb, shots_b, b_label, sh_season_b)]:
+                        with c_:
+                            ref = league_zone(sea_)
+                            section(lab, shot_summary(df_))
+                            st.plotly_chart(zone_fig(z_, ref, colored=ref is not None, colorbar=False,
+                                                     ref_label=f"{sea_} 聯盟平均"), width="stretch")
+                    st.markdown('<div class="legend-row"><span class="sw" style="background:#7c3aed"></span>比當季聯盟平均準'
+                                '<span class="sw" style="background:#ece9f2;border:1px solid #d9d3e6"></span>和聯盟差不多'
+                                '<span class="sw" style="background:#3d74c9"></span>比聯盟不準'
+                                '<span class="lg-note">兩張圖同一套規則：圈越大＝那一區出手越多，圈內數字＝命中率</span></div>',
+                                unsafe_allow_html=True)
                 left, right = None, st.container()   # 下面的五大區對照改成整排寬
             else:
                 left, right = st.columns([5, 4], gap="large")
