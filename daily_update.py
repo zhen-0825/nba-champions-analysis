@@ -8,6 +8,8 @@
 會依序執行：
   1. load_to_supabase.py --start <本季開始日>   八隊球員逐場數據、全聯盟球隊數據
   2. load_extra.py --current                    本季的投籃、戰術、陣容、跑動數據
+  3. load_to_supabase.py --next 2               再加入 2 支還沒載入的球隊（20 季完整資料）
+     想改成每天 1 隊：把下面 TEAMS_PER_DAY 改成 1；30 隊都載完後這一步會自動略過
 每次的訊息會存在 logs/ 資料夾（只留最近 30 天）。
 """
 
@@ -21,6 +23,7 @@ from fetch_nba import season_of
 HERE = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.path.join(HERE, "logs")
 KEEP_LOGS = 30
+TEAMS_PER_DAY = 2   # 每天新加入幾支球隊（1 或 2 比較安全，太多可能被 NBA 官網暫時擋掉）
 
 
 def run(args, log):
@@ -57,7 +60,8 @@ def main():
         log.write(title + "\n")
         ok1 = run(["load_to_supabase.py", "--start", start] + dry, log)
         ok2 = run(["load_extra.py", "--current"] + dry, log)
-        result = "全部成功" if ok1 and ok2 else "有部分失敗，請看上面的訊息或記錄檔"
+        ok3 = run(["load_to_supabase.py", "--next", str(TEAMS_PER_DAY)] + dry, log)
+        result = "全部成功" if ok1 and ok2 and ok3 else "有部分失敗，請看上面的訊息或記錄檔"
         log.write(f"\n===== 結束：{result} =====\n")
         print(f"\n===== 結束：{result} =====\n記錄檔：{log_path}")
     clean_old_logs()

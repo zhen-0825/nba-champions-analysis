@@ -20,6 +20,12 @@ import streamlit as st
 # =====================================================================
 TEAM_ZH = {"GSW": "勇士", "DEN": "金塊", "BOS": "塞爾提克", "OKC": "雷霆", "NYK": "尼克",
            "MIL": "公鹿", "LAL": "湖人", "TOR": "暴龍"}
+# 其他 22 隊（每天慢慢載入球員逐場數據；載入後會出現在左側球隊選單，預設不勾選）
+OTHER_ZH = {"SAS": "馬刺", "DAL": "獨行俠", "MIA": "熱火", "CLE": "騎士", "ATL": "老鷹", "BKN": "籃網",
+            "CHA": "黃蜂", "CHI": "公牛", "DET": "活塞", "HOU": "火箭", "IND": "溜馬", "LAC": "快艇",
+            "MEM": "灰熊", "MIN": "灰狼", "NOP": "鵜鶘", "ORL": "魔術", "PHI": "七六人", "PHX": "太陽",
+            "POR": "拓荒者", "SAC": "國王", "UTA": "爵士", "WAS": "巫師"}
+ALL_ZH = {**TEAM_ZH, **OTHER_ZH}
 # 每支球隊固定一個顏色，取自球衣主視覺色，並調亮到深色背景上看得清楚
 TEAM_COLORS = {
     "GSW": "#3B6FD4",   # 勇士：皇家藍
@@ -187,8 +193,13 @@ def section(title, sub=""):
 
 def style(fig, height):
     """統一圖表外觀：透明背景、淡紫格線、深色提示框"""
+    # 圖的上緣如果有文字標註（例如「★ 奪冠」），上方多留空間，免得字被切掉
+    try:
+        top = 34 if any(a.yref == "paper" and (a.y or 0) >= 1 for a in fig.layout.annotations) else 8
+    except Exception:
+        top = 8
     fig.update_layout(
-        height=height, margin=dict(l=8, r=24, t=8, b=8),
+        height=height, margin=dict(l=8, r=24, t=top, b=8),
         font=dict(family=FONT, size=13, color=INK),
         plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
         hoverlabel=dict(font=dict(family=FONT, size=13, color=INK),
@@ -208,7 +219,7 @@ def fmt(v, f):
 
 
 def team_label(abbr):
-    return f"{abbr} {TEAM_ZH.get(abbr, '')}".strip()
+    return f"{abbr} {ALL_ZH.get(abbr, '')}".strip()
 
 
 def rounded(fig):
@@ -459,7 +470,9 @@ if team_raw.empty:
     st.error("資料庫裡還沒有資料，請先執行 load_to_supabase.py")
     st.stop()
 
-ALL_TEAMS = [t for t in TEAM_ZH if t in set(team_raw["abbreviation"])]
+ALL_TEAMS = [t for t in TEAM_ZH if t in set(team_raw["abbreviation"])]   # 八支冠軍隊（投籃、陣容等進階數據只有這八隊）
+# 已經載入球員逐場數據的其他球隊（依英文縮寫排序）
+EXTRA_TEAMS = sorted(t for t in set(team_raw["abbreviation"]) if t not in TEAM_ZH)
 ALL_SEASONS = sorted(team_raw["season"].unique())
 CHAMP_SET = set(zip(champs["season"], champs["abbreviation"]))   # {(球季, 球隊)}
 P_COLS = ["gp", "min", "pts", "fgm", "fga", "fg3m", "fg3a", "ftm", "fta", "reb", "ast", "stl", "blk", "tov"]
@@ -470,7 +483,11 @@ P_COLS = ["gp", "min", "pts", "fgm", "fga", "fg3m", "fg3a", "ftm", "fta", "reb",
 # =====================================================================
 with st.sidebar:
     st.markdown("### 查詢條件")
-    teams_sel = pills("球隊", ALL_TEAMS, "teams", default=ALL_TEAMS, multi=True, format_func=team_label)
+    teams_sel = pills("球隊", ALL_TEAMS + EXTRA_TEAMS, "teams", default=ALL_TEAMS, multi=True,
+                      format_func=team_label)
+    if EXTRA_TEAMS:
+        st.caption(f"八支冠軍隊預設勾選；另外已載入 {len(EXTRA_TEAMS)} 隊，點一下就能加入比較"
+                   f"（還有 {30 - len(ALL_TEAMS) - len(EXTRA_TEAMS)} 隊每天陸續載入中）。")
     s_from, s_to = st.select_slider("球季範圍", ALL_SEASONS,
                                     value=(ALL_SEASONS[0], ALL_SEASONS[-1]))
     types_sel = pills("比賽類型", list(TYPE_OPTIONS), "types", default=["例行賽"], multi=True)
@@ -522,7 +539,7 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 k1, k2, k3, k4 = st.columns(4)
-kpi(k1, "球隊", f"{len(teams_sel)} 隊", "2019～2026 八屆冠軍")
+kpi(k1, "球隊", f"{len(teams_sel)} 隊", f"資料庫已有 {len(ALL_TEAMS) + len(EXTRA_TEAMS)} / 30 隊")
 kpi(k2, "球季", f"{len(seasons)} 季", f"{s_from} ～ {s_to}")
 kpi(k3, "比賽場數", f"{int(team_season['games'].sum()):,}", "所選球隊、球季、比賽類型合計")
 kpi(k4, "範圍內奪冠球季", f"{int(team_season['champion'].sum())} 次", "圖上以 ★ 標示")
@@ -1517,6 +1534,9 @@ with tab_play:
                 st.caption("這個戰術沒有資料。")
             else:
                 tr_seasons = list(tr["season"])
+                # 回合數很少的球季（例如剛開打的這一季）數字容易暴衝，畫成空心圈提醒「樣本少」
+                poss = pd.to_numeric(tr["poss"], errors="coerce")
+                few = list((poss < 0.3 * poss.median()).fillna(False))
                 g1, g2 = st.columns(2, gap="large")
                 for c_, val, lg, title, f_ in [
                         (g1, "poss_pct", "lg_share", "使用率", ".0%"),
@@ -1527,14 +1547,19 @@ with tab_play:
                                                  line=dict(color=MUTED, width=2, dash="dot")))
                         fig.add_trace(go.Scatter(x=tr_seasons, y=tr[val], name=TEAM_ZH.get(pl_team, pl_team),
                                                  mode="lines+markers", line=dict(color=color, width=3),
-                                                 marker=dict(size=7)))
+                                                 marker=dict(size=[11 if f else 7 for f in few],
+                                                             symbol=["circle-open" if f else "circle" for f in few],
+                                                             line=dict(width=2, color=color))))
                         champion_bands(fig, tr_seasons, pl_team)
-                        fig = style(fig, 300)
+                        fig = style(fig, 320)
                         fig.update_yaxes(tickformat=f_, title=title)
-                        fig.update_xaxes(type="category")
-                        st.plotly_chart(fig, width="stretch")
+                        fig.update_xaxes(type="category", tickangle=-45)
+                        st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
+                few_s = [s_ for s_, f in zip(tr_seasons, few) if f]
                 st.caption(("防守端的每回合失分：線越低越好。" if not is_off else "")
-                           + "左圖看「用得多不多」，右圖看「打得好不好」。")
+                           + "左圖看「用得多不多」，右圖看「打得好不好」。"
+                           + (f"空心圈（{'、'.join(few_s)}）是回合數很少的球季，"
+                              "例如剛開打的這一季，數字容易忽高忽低，先不要下結論。" if few_s else ""))
 
         # ===== 各隊戰術比較 =====
         st.write("")
@@ -1585,7 +1610,7 @@ with tab_play:
                 ab = id2abbr.get(t, str(t))
                 w_ = wp.get(t, float("nan"))
                 star = " ★" if (pl_season, t) in champ_ids else ""
-                labels.append(f"{ab} {TEAM_ZH.get(ab, '')}{star}　{'' if pd.isna(w_) else format(w_, '.0%')}".strip())
+                labels.append(f"{ab} {ALL_ZH.get(ab, '')}{star}　{'' if pd.isna(w_) else format(w_, '.0%')}".strip())
             z = hm.values.astype(float)
             # 顏色：越亮越「好」或越「多」。效率排名、防守失分是數字越小越好，所以色階反過來
             reverse = col_key == "rk_ppp" or (col_key == "ppp" and not is_off)

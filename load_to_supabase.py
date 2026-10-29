@@ -13,6 +13,13 @@
   python load_to_supabase.py --only players     只更新八隊球員逐場數據
   python load_to_supabase.py --start 2026-10-01 只更新當季（每日自動更新用這個）
   python load_to_supabase.py --teams GSW --start 2025-10-01 --end 2026-06-30
+  python load_to_supabase.py --next 2           再加入 2 支「還沒載入」的球隊（2006 年起完整球員逐場）
+  python load_to_supabase.py --progress         看看 30 隊已經載入幾隊、下一批是誰
+
+關於 --next：
+  八支冠軍隊以外的 22 隊，每次挑「下一批」載入，成功後記在 data/added_teams.txt。
+  之後每天的更新（--start 本季）會自動包含這些已加入的球隊，讓它們的資料也保持最新。
+  順序：先載入 2007～2018 的其他冠軍（SAS、MIA、DAL、CLE），再依英文縮寫排列。
 
 需要先做好
   1. pip install supabase python-dotenv
@@ -60,6 +67,7 @@ LEAGUE_ADV = {"OFF_RATING": "off_rating", "DEF_RATING": "def_rating", "NET_RATIN
 LEAGUE_OPP = {"OPP_PTS": "opp_pts", "OPP_FGM": "opp_fgm", "OPP_FGA": "opp_fga",
               "OPP_FG3M": "opp_fg3m", "OPP_FG3A": "opp_fg3a", "OPP_TOV": "opp_tov"}
 LEAGUE_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "league")
+ADDED_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "added_teams.txt")
 # ==================
 
 
@@ -130,11 +138,15 @@ def build_tables(data):
 
 
 def load_players(client, team_list, start, end):
+    """回傳 {球隊: 抓到幾季的例行賽}，用來判斷這隊是不是完整載入"""
+    got = {}
     for abbr in team_list:
         print(f"\n===== {abbr.upper()} 球員逐場 =====")
         data = fetch_games(abbr, start, end, SEASON_TYPES)
         if data.empty:
+            got[abbr] = 0
             continue
+        got[abbr] = data.loc[data["SEASON_TYPE"] == "Regular Season", "SEASON"].nunique()
         players, games, team_games, stats = build_tables(data)
         print("  寫入資料庫")
         # 順序很重要：先寫球員和比賽，後面的表才能對應得到
@@ -142,6 +154,66 @@ def load_players(client, team_list, start, end):
         upsert(client, "games", games, "game_id")
         upsert(client, "team_games", team_games, "game_id,team_id")
         upsert(client, "player_game_stats", stats, "game_id,player_id")
+    return got
+
+
+# ---------------------------------------------------------------------
+# 1b. 慢慢加入其他 22 隊（每次 --next N 隊）
+# ---------------------------------------------------------------------
+def read_added():
+    """已經完整載入的非冠軍球隊（存在 data/added_teams.txt，一行一隊）"""
+    if not os.path.exists(ADDED_FILE):
+        return []
+    with open(ADDED_FILE, encoding="utf-8") as f:
+        return [line.strip().upper() for line in f if line.strip() and not line.startswith("#")]
+
+
+def mark_added(abbr):
+    os.makedirs(os.path.dirname(ADDED_FILE), exist_ok=True)
+    with open(ADDED_FILE, "a", encoding="utf-8") as f:
+        f.write(abbr + "\n")
+
+
+def team_queue():
+    """還沒載入的球隊，依順序排好：先其他年代的冠軍，再依英文縮寫"""
+    from nba_api.stats.static import teams
+    all_abbr = sorted(t["abbreviation"] for t in teams.get_teams())
+    done = set(CHAMPION_TEAMS) | set(read_added())
+    old_champs = [a for a in dict.fromkeys(CHAMPIONS.values()) if a in all_abbr]
+    order = old_champs + [a for a in all_abbr if a not in old_champs]
+    return [a for a in order if a not in done]
+
+
+def load_next(client, n):
+    queue = team_queue()
+    if not queue:
+        print("\n30 隊都已經載入完成，不需要再加了！")
+        return True
+    batch = queue[:n]
+    print(f"\n===== 今天加入：{'、'.join(batch)}（還剩 {len(queue) - len(batch)} 隊）=====")
+    # 應該要有幾季：2006-07 到現在這一季；進行中的球季剛開打時可能還沒比賽，所以下面允許少 1 季
+    expected = len(seasons_between(datetime.strptime(DEFAULT_START, "%Y-%m-%d").date(), date.today()))
+    got = load_players(client, batch, DEFAULT_START, None)
+    ok = True
+    for abbr in batch:
+        seasons_ok = got.get(abbr, 0)
+        if client is not None and seasons_ok >= expected - 1:
+            mark_added(abbr)
+            print(f"  {abbr}：完成（{seasons_ok} 季例行賽），已記錄到 data/added_teams.txt")
+        elif client is None:
+            print(f"  {abbr}：試跑模式，不記錄")
+        else:
+            ok = False
+            print(f"  {abbr}：只抓到 {seasons_ok} / {expected} 季，先不記錄，明天會再試一次"
+                  "（抓過的球季有存檔，不會重抓）")
+    return ok
+
+
+def show_progress():
+    added = read_added()
+    queue = team_queue()
+    print(f"已載入：八支冠軍隊 + {len(added)} 隊（{'、'.join(added) or '還沒有'}）")
+    print(f"還沒載入：{len(queue)} 隊（下一批：{'、'.join(queue[:2]) or '無'}）")
 
 
 # ---------------------------------------------------------------------
@@ -231,18 +303,29 @@ def load_reference(client):
 
 def main():
     parser = argparse.ArgumentParser(description="把 NBA 數據寫進 Supabase")
-    parser.add_argument("--teams", nargs="+", default=CHAMPION_TEAMS, help="球隊縮寫，可多個，例如 GSW BOS")
+    parser.add_argument("--teams", nargs="+", default=CHAMPION_TEAMS + read_added(),
+                        help="球隊縮寫，可多個，例如 GSW BOS（預設：八支冠軍隊＋已用 --next 加入的球隊）")
     parser.add_argument("--start", default=DEFAULT_START, help="開始日期，格式 2006-10-01")
     parser.add_argument("--end", default=DEFAULT_END, help="結束日期，不填就是今天")
     parser.add_argument("--only", choices=["players", "league"], help="只更新其中一種資料")
     parser.add_argument("--dry-run", action="store_true", help="只抓資料、算筆數，不寫進資料庫")
+    parser.add_argument("--next", type=int, metavar="N", help="再加入 N 支還沒載入的球隊（完整 20 季球員逐場）")
+    parser.add_argument("--progress", action="store_true", help="顯示 30 隊的載入進度")
     args = parser.parse_args()
+
+    if args.progress:
+        show_progress()
+        return
 
     client = None if args.dry_run else connect()
     if args.dry_run:
         print("【試跑模式】不會寫進資料庫\n")
 
     load_reference(client)
+    if args.next:
+        ok = load_next(client, args.next)
+        print(f"\n全部完成！（{datetime.now():%Y-%m-%d %H:%M}）")
+        raise SystemExit(0 if ok else 1)
     if args.only != "league":
         load_players(client, args.teams, args.start, args.end)
     if args.only != "players":
