@@ -1536,6 +1536,215 @@ with tab_play:
                 st.caption(("防守端的每回合失分：線越低越好。" if not is_off else "")
                            + "左圖看「用得多不多」，右圖看「打得好不好」。")
 
+        # ===== 各隊戰術比較 =====
+        st.write("")
+        st.divider()
+        win = pd.DataFrame()
+        if not league.empty:   # 例行賽勝率：用來排序與找奪冠方程式
+            win = league[league["season_type"] == "Regular Season"][["season", "team_id", "abbreviation", "w", "gp"]].copy()
+            win["w"] = pd.to_numeric(win["w"], errors="coerce")
+            win["gp"] = pd.to_numeric(win["gp"], errors="coerce")
+            win["win_pct"] = win["w"] / win["gp"].where(win["gp"] > 0)
+            win = win.drop_duplicates(["season", "team_id"])
+        champ_ids = set(zip(champs["season"], champs["team_id"]))   # {(球季, team_id)}
+
+        section(f"{pl_season} 各隊戰術比較（{side_zh}）",
+                "每一列是一支球隊，依例行賽勝率由高到低排；框起來的那一列是當季冠軍；最下面是聯盟平均")
+        k1, k2 = st.columns(2)
+        with k1:
+            cmp_metric = seg("比較什麼", ["使用率", "每回合" + ("得分" if is_off else "失分"), "效率排名"], "pl_cmp_metric")
+        with k2:
+            cmp_scope = seg("球隊範圍", ["全聯盟 30 隊", "八支冠軍隊"], "pl_cmp_scope")
+        sea = PT[(PT["season"] == pl_season) & (PT["season_type"] == pl_type) & (PT["side"] == side)
+                 & (PT["play_type"] != "Misc")]
+        if cmp_scope == "八支冠軍隊":
+            sea = sea[sea["team_id"].isin(set(team_raw["team_id"]))]
+        if sea.empty:
+            st.caption("這個條件沒有資料。")
+        else:
+            col_key = {"使用率": "poss_pct", "效率排名": "rk_ppp"}.get(cmp_metric, "ppp")
+            hm = sea.pivot_table(index="team_id", columns="play_type", values=col_key, aggfunc="first")
+            hm = hm[[p for p in PLAY_ORDER if p in hm.columns]]
+            wp = win[win["season"] == pl_season].set_index("team_id")["win_pct"] if not win.empty else pd.Series(dtype=float)
+            order = sorted(hm.index, key=lambda t: -(wp.get(t, float("nan")) if pd.notna(wp.get(t, float("nan"))) else -1))
+            hm = hm.reindex(order)
+            # 最下面加一列聯盟平均（全聯盟 30 隊，不受「球隊範圍」影響）
+            lg = PT_LG[(PT_LG["season"] == pl_season) & (PT_LG["season_type"] == pl_type) & (PT_LG["side"] == side)]
+            lg = lg.set_index("play_type")
+            if col_key == "poss_pct":
+                hm.loc["lg"] = lg["lg_share"].reindex(hm.columns).values
+            elif col_key == "ppp":
+                hm.loc["lg"] = lg["lg_ppp"].reindex(hm.columns).values
+            else:
+                hm.loc["lg"] = 15.5   # 排名的中間值
+            labels = []
+            for t in hm.index:
+                if t == "lg":
+                    labels.append("聯盟平均")
+                    continue
+                ab = id2abbr.get(t, str(t))
+                w_ = wp.get(t, float("nan"))
+                star = " ★" if (pl_season, t) in champ_ids else ""
+                labels.append(f"{ab} {TEAM_ZH.get(ab, '')}{star}　{'' if pd.isna(w_) else format(w_, '.0%')}".strip())
+            z = hm.values.astype(float)
+            # 顏色：越亮越「好」或越「多」。效率排名、防守失分是數字越小越好，所以色階反過來
+            reverse = col_key == "rk_ppp" or (col_key == "ppp" and not is_off)
+            ramp = PURPLE_RAMP[::-1] if reverse else PURPLE_RAMP
+            zz = z[:-1] if len(z) > 1 else z
+            zmin, zmax = (1, 30) if col_key == "rk_ppp" else (pd.Series(zz.ravel()).min(), pd.Series(zz.ravel()).max())
+            vfmt = {"poss_pct": ".0%", "ppp": ".2f", "rk_ppp": ".0f"}[col_key]
+            xs = [PLAY_ZH.get(p, p) for p in hm.columns]
+            fig = go.Figure(go.Heatmap(
+                z=z, x=xs, y=labels, zmin=zmin, zmax=zmax, xgap=2, ygap=2, showscale=False,
+                colorscale=[[i / (len(ramp) - 1), c] for i, c in enumerate(ramp)],
+                hovertemplate="%{y}<br>%{x}：%{z:" + vfmt + "}<extra></extra>"))
+            if len(hm) <= 12:   # 隊伍少才在格子裡寫數字，30 隊時太擠，改用滑鼠查看
+                for i in range(z.shape[0]):
+                    for j in range(z.shape[1]):
+                        if pd.notna(z[i, j]) and not (col_key == "rk_ppp" and hm.index[i] == "lg"):
+                            lvl = (z[i, j] - zmin) / ((zmax - zmin) or 1)
+                            lvl = 1 - lvl if reverse else lvl
+                            fig.add_annotation(x=xs[j], y=labels[i], text=format(z[i, j], vfmt), showarrow=False,
+                                               font=dict(size=10.5, color="#140e20" if lvl > 0.6 else "#efeaf8"))
+            for i, t in enumerate(hm.index):   # 冠軍那一列框起來
+                if (pl_season, t) in champ_ids:
+                    fig.add_shape(type="rect", xref="x", yref="y", x0=-0.5, x1=len(xs) - 0.5, y0=i - 0.5, y1=i + 0.5,
+                                  line=dict(color=ACCENT, width=2))
+            fig.update_yaxes(autorange="reversed", showgrid=False)
+            fig.update_xaxes(showgrid=False, side="top")
+            st.plotly_chart(style(fig, 90 + 30 * len(hm)), width="stretch")
+            st.caption("讀法：上面幾列是勝率最高的球隊。直著看一欄，如果亮色集中在上半部、暗色在下半部，"
+                       "代表這個戰術「打得好的隊伍比較會贏」。30 隊時格子裡不寫數字，把滑鼠移到格子上就能看到。")
+
+        # ===== 奪冠方程式 =====
+        st.write("")
+        st.divider()
+        section("奪冠方程式：哪些戰術和贏球最有關？",
+                "用全聯盟 30 隊、每一季的例行賽：每種戰術的「效率」和「使用率」，各自和球隊勝率的相關係數。"
+                "長條越長（越往右），代表這件事做得好的隊伍越會贏")
+        if win.empty:
+            st.info("需要全聯盟數據才能計算，請先執行：python load_to_supabase.py --only league")
+        else:
+            M = PT[(PT["season_type"] == "Regular Season") & (PT["play_type"] != "Misc")].merge(
+                win[["season", "team_id", "win_pct"]], on=["season", "team_id"], how="inner")
+            # 效率統一成「數字越大越好」：防守端用負的失分
+            M["eff"] = M["ppp"].where(M["side"] == "offensive", -M["ppp"])
+            corr = []
+            for (sd, p), g in M.groupby(["side", "play_type"]):
+                if len(g) >= 20:
+                    corr.append({"side": sd, "play_type": p, "n": len(g),
+                                 "r_eff": g["eff"].corr(g["win_pct"]), "r_use": g["poss_pct"].corr(g["win_pct"])})
+            corr = pd.DataFrame(corr)
+            n_seasons = M["season"].nunique()
+            if corr.empty:
+                st.caption("資料太少，還算不出來。")
+            else:
+                cs = corr[corr["side"] == side].sort_values("r_eff")
+                fig = go.Figure()
+                fig.add_trace(go.Bar(y=[PLAY_ZH.get(p, p) for p in cs["play_type"]], x=cs["r_use"], orientation="h",
+                                     name="使用率 和勝率的相關", marker_color="#5a5270",
+                                     hovertemplate="%{y}：使用率相關 %{x:+.2f}<extra></extra>"))
+                fig.add_trace(go.Bar(y=[PLAY_ZH.get(p, p) for p in cs["play_type"]], x=cs["r_eff"], orientation="h",
+                                     name="效率 和勝率的相關", marker_color=ACCENT,
+                                     hovertemplate="%{y}：效率相關 %{x:+.2f}<extra></extra>"))
+                fig.add_vline(x=0, line=dict(color=MUTED, width=1))
+                for x0, txt in [(0.1, "弱"), (0.3, "中"), (0.5, "強")]:
+                    fig.add_vline(x=x0, line=dict(color=GRID, width=1, dash="dot"))
+                    fig.add_annotation(x=x0, y=1.0, yref="paper", yanchor="bottom", text=txt, showarrow=False,
+                                       font=dict(size=10, color="#8d86a3"))
+                fig = style(fig, 90 + 38 * len(cs))
+                fig.update_layout(barmode="group", bargap=0.3)
+                fig.update_xaxes(range=[min(-0.3, cs[["r_eff", "r_use"]].min().min() - 0.05),
+                                        max(0.6, cs[["r_eff", "r_use"]].max().max() + 0.05)],
+                                 tickformat="+.1f", title="相關係數（−1 ～ +1，0 代表沒關係）")
+                fig.update_yaxes(showgrid=False)
+                rounded(fig)
+                st.plotly_chart(fig, width="stretch")
+                top = cs.sort_values("r_eff", ascending=False).head(3)
+                use_stronger = (cs["r_use"].abs() > cs["r_eff"]).sum()
+                insight([
+                    f"{side_zh}端和勝率最有關的三種戰術效率：<b>{'、'.join(PLAY_ZH.get(p, p) for p in top['play_type'])}</b>"
+                    f"（相關係數 {'、'.join(format(v, '+.2f') for v in top['r_eff'])}）。",
+                    f"{len(cs)} 種戰術中，有 {use_stronger} 種是「用得多」比「打得好」更和勝率有關。"
+                    + ("這支持今天的假設：贏球靠的是效率，不是打法。" if use_stronger <= len(cs) / 3
+                       else "這和今天的假設不太一樣：有不少戰術是「用多用少」本身就和勝率有關。"),
+                    f"資料：{n_seasons} 季 × 30 隊的例行賽。相關不等於因果，例如好球隊快攻多，"
+                    "也可能是因為防守好、搶到球就快攻。",
+                ])
+
+                # ---- 方程式分數：用上面的相關係數當權重，替每支球隊打分數，看冠軍會不會排在前面 ----
+                section("檢驗方程式：用這個公式幫每隊打分數，冠軍會排第幾？",
+                        "方程式分數＝把進攻、防守各戰術的效率換成「比同季聯盟好多少」（標準分數），"
+                        "再用上圖的效率相關係數當權重加權平均；只用相關係數大於 0 的戰術")
+                wts = corr.set_index(["side", "play_type"])["r_eff"].clip(lower=0)
+                M["z"] = M.groupby(["season", "side", "play_type"])["eff"].transform(
+                    lambda s: (s - s.mean()) / (s.std() or 1))
+                M["w"] = [wts.get((sd, p), 0) for sd, p in zip(M["side"], M["play_type"])]
+                M["wz"] = M["w"] * M["z"]
+                sc = M.groupby(["season", "team_id"]).agg(wz=("wz", "sum"), w=("w", "sum"), win_pct=("win_pct", "first"))
+                sc["score"] = sc["wz"] / sc["w"].where(sc["w"] > 0)
+                sc = sc.reset_index()
+                sc["rk_score"] = sc.groupby("season")["score"].rank(ascending=False, method="min")
+                sc["rk_win"] = sc.groupby("season")["win_pct"].rank(ascending=False, method="min")
+                chs = sc[[(s, t) in champ_ids for s, t in zip(sc["season"], sc["team_id"])]].sort_values("season")
+                if chs.empty:
+                    st.caption("範圍內沒有冠軍球季。")
+                else:
+                    rows = []
+                    for _, r in chs.iterrows():
+                        ab = id2abbr.get(r["team_id"], "")
+                        rows.append({"球季": r["season"], "冠軍": f"{ab} {TEAM_ZH.get(ab, '')}", "_key": ab,
+                                     "方程式排名": f"{r['rk_score']:.0f}", "勝率排名": f"{r['rk_win']:.0f}",
+                                     "方程式分數": f"{r['score']:+.2f}", "勝率": f"{r['win_pct']:.1%}"})
+                    nice_table(pd.DataFrame(rows), num_cols=["方程式排名", "勝率排名", "方程式分數", "勝率"],
+                               signed_cols=["方程式分數"], dot_col="冠軍", colors=TEAM_COLORS)
+                    top3 = int((chs["rk_score"] <= 3).sum())
+                    top3_win = int((chs["rk_win"] <= 3).sum())
+                    r_all = sc["score"].corr(sc["win_pct"])
+                    insight([
+                        f"{len(chs)} 位冠軍裡，有 <b>{top3}</b> 位的方程式分數在當季前 3 名"
+                        f"（對照：例行賽勝率前 3 名的有 {top3_win} 位）。",
+                        f"全部球隊的方程式分數和勝率相關 {r_all:+.2f}。",
+                        "讀法：方程式排名越前面，代表「把最重要的戰術打好」這件事，冠軍做得比別人好。"
+                        "如果某位冠軍方程式排名很後面，他就是靠別的東西奪冠（季後賽表現、健康、球星），值得單獨研究。",
+                        "注意：權重和分數用的是同一批資料算出來的，所以這是「描述」不是「預測」；"
+                        "要真正驗證，可以只用前幾季算權重，再看後幾季的冠軍排第幾。",
+                    ])
+
+                # ---- 單一戰術：效率 vs 勝率散點圖 ----
+                section("單一戰術：效率越好，勝率越高嗎？",
+                        "每個點是一支球隊的一個球季（例行賽）；灰色是其他球隊，彩色是冠軍")
+                default_fp = cs.sort_values("r_eff", ascending=False)["play_type"].iloc[0]
+                fp = pills("戰術", list(cs.sort_values("r_eff", ascending=False)["play_type"]), "pl_formula_play",
+                           default=default_fp, format_func=lambda p: PLAY_ZH.get(p, p))
+                d = M[(M["side"] == side) & (M["play_type"] == fp)].copy()
+                d["champ"] = [(s, t) in champ_ids for s, t in zip(d["season"], d["team_id"])]
+                d["abbr"] = d["team_id"].map(id2abbr)
+                fig = go.Figure()
+                o = d[~d["champ"]]
+                fig.add_trace(go.Scatter(x=o["ppp"], y=o["win_pct"], mode="markers", name="其他球隊",
+                                         marker=dict(size=7, color=DIM, opacity=0.7),
+                                         customdata=o[["abbr", "season"]].values,
+                                         hovertemplate="%{customdata[0]} %{customdata[1]}<br>每回合 %{x:.2f}｜勝率 %{y:.1%}<extra></extra>"))
+                c = d[d["champ"]]
+                fig.add_trace(go.Scatter(x=c["ppp"], y=c["win_pct"], mode="markers+text", name="冠軍",
+                                         marker=dict(size=13, symbol="star",
+                                                     color=[TEAM_COLORS.get(a, ACCENT) for a in c["abbr"]],
+                                                     line=dict(width=1, color="#f4f0ff")),
+                                         text=[f"{a} {s[2:]}" for a, s in zip(c["abbr"], c["season"])],
+                                         textposition="top center", textfont=dict(size=11, color=INK),
+                                         customdata=c[["abbr", "season"]].values,
+                                         hovertemplate="★ %{customdata[0]} %{customdata[1]}<br>每回合 %{x:.2f}｜勝率 %{y:.1%}<extra></extra>"))
+                fig = style(fig, 420)
+                fig.update_xaxes(title="每回合" + ("得分（越右越好）" if is_off else "失分（越左越好）"), tickformat=".2f")
+                fig.update_yaxes(title="例行賽勝率", tickformat=".0%")
+                st.plotly_chart(fig, width="stretch")
+                r_fp = corr[(corr["side"] == side) & (corr["play_type"] == fp)]["r_eff"]
+                st.caption(f"{PLAY_ZH.get(fp, fp)}（{side_zh}）的效率和勝率相關 {r_fp.iloc[0]:+.2f}。"
+                           + ("進攻端：點越往右上排，代表打得越好越會贏。" if is_off else
+                              "防守端：失分越少越好，所以點應該往左上排。")
+                           + "看看冠軍的星星，是不是都在右上角（防守是左上角）？")
+
 
 # ---------- 1. 球季趨勢 ----------
 with tab1:
