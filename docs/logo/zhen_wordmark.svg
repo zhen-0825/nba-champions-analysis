@@ -1,16 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="200" height="48" viewBox="0 0 200 48">
-  <defs>
-    <linearGradient id="zg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#c4b5fd"/>
-      <stop offset="1" stop-color="#7c3aed"/>
-    </linearGradient>
-  </defs>
-  <rect x="0.5" y="4.5" width="39" height="39" rx="10" fill="#0d0a14" stroke="#7c3aed" stroke-opacity="0.7"/>
-  <path d="M11 15.5 H28.5 L11.5 31.5 L17 31.5 L21.5 27.5 L25 30 L29.5 25"
-        fill="none" stroke="url(#zg)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="29.5" cy="25" r="2.4" fill="#f4f0ff"/>
-  <text x="52" y="31" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="24" font-weight="800"
-        letter-spacing="0.5"><tspan fill="#a78bfa">Z</tspan><tspan fill="#f4f0ff">he</tspan><tspan fill="#a78bfa">N</tspan></text>
-  <text x="53" y="43" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="8.5" font-weight="600"
-        letter-spacing="2.2" fill="#8d86a3">DATA · BASKETBALL</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="220" height="48" viewBox="0 0 220 48">
+  <g transform="translate(0,4)">  <rect x="0.75" y="0.75" width="38.5" height="38.5" rx="7" fill="#0d0a14" stroke="#7c3aed" stroke-width="1.5"/>
+  <polygon points="8,8 32,8 32,13.5 8,13.5" fill="#ffffff"/>
+  <polygon points="25.5,13.5 32,13.5 14.5,27.5 8,27.5" fill="#ffffff"/>
+  <rect x="8" y="27.5" width="6.5" height="4.5" fill="#ffffff"/>
+  <rect x="16.75" y="22.5" width="6.5" height="9.5" fill="#8b5cf6"/>
+  <rect x="25.5" y="17" width="6.5" height="15" fill="#8b5cf6"/>
+</g>
+  <text x="52" y="31" font-family="'Arial Black', 'Segoe UI Black', Arial, sans-serif" font-size="25" font-weight="900"
+        letter-spacing="0.5"><tspan fill="#8b5cf6">Z</tspan><tspan fill="#ffffff">he</tspan><tspan fill="#8b5cf6">N</tspan></text>
+  <text x="53" y="43" font-family="Arial, sans-serif" font-size="8" font-weight="700" letter-spacing="2.6" fill="#8f889f">DATA · BASKETBALL</text>
 </svg>
