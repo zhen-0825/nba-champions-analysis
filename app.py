@@ -1358,9 +1358,9 @@ with tab_play:
         if not league.empty:
             id2abbr.update(dict(zip(league["team_id"], league["abbreviation"])))
 
-        c1, c2, c3, c4 = st.columns([3, 2, 2, 2])
-        with c1:
-            pl_team = pills("球隊", ALL_TEAMS, "pl_team", default=ALL_TEAMS[0], format_func=team_label)
+        # 球隊按鈕放在獨立一整排，8 隊才排得下（擠在窄欄裡會被切掉、只看得到幾隊）
+        pl_team = pills("球隊", ALL_TEAMS, "pl_team", default=ALL_TEAMS[0], format_func=team_label)
+        c2, c3, c4 = st.columns(3)
         pl_tid = int(team_raw[team_raw["abbreviation"] == pl_team]["team_id"].iloc[0])
         pl_seasons = sorted(PT[PT["team_id"] == pl_tid]["season"].unique())[::-1]
         if not pl_seasons:   # 這隊完全沒有戰術數據：仍列出所有球季，下面會顯示「沒有資料」
