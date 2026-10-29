@@ -1220,7 +1220,7 @@ with tab_shot:
                                                font=dict(size=10.5, color="#140e20" if bright and col != "vs_lg"
                                                          else "#efeaf8"))
                     fig.update_yaxes(autorange="reversed", showgrid=False)
-                    fig.update_xaxes(showgrid=False, side="top")
+                    fig.update_xaxes(showgrid=False, side="top", type="category")
                     st.plotly_chart(style(fig, 90 + 40 * len(keys)), width="stretch")
                     st.caption("空白格＝那季沒有出手，或出手太少（命中率不可靠）所以不上色。"
                                "「命中率 vs 聯盟」的數字是百分點：+5 代表比同季聯盟平均準 5 個百分點。")
@@ -1805,7 +1805,7 @@ with tab1:
             fig.add_annotation(x=last["season"], y=last[metric], text=abbr, showarrow=False,
                                xanchor="left", xshift=10, font=dict(size=11, color=INK_2))
     fig.update_yaxes(title=metric_name, tickformat=".0%" if "%" in mfmt else None)
-    fig.update_xaxes(title="球季", categoryorder="array", categoryarray=seasons)
+    fig.update_xaxes(title="球季", categoryorder="array", categoryarray=seasons, type="category")
     fig.update_layout(hovermode="x unified")
     st.plotly_chart(style(fig, 480), width="stretch")
 
@@ -1836,7 +1836,9 @@ with tab2:
                                text=star + fmt(v, mfmt),
                                font=dict(size=10.5, color="#140e20" if level > 0.6 else "#efeaf8"))
     fig.update_yaxes(autorange="reversed", showgrid=False)
-    fig.update_xaxes(showgrid=False, side="top")
+    # 一定要指定 type="category"：不然 Plotly 會把「2006-07」這種球季當成「2006 年 7 月」的日期，
+    # 2012-13 以後（13 月不存在）就對不上位置，數字全部擠到最左邊
+    fig.update_xaxes(showgrid=False, side="top", type="category")
     st.plotly_chart(style(fig, 100 + 62 * len(pivot.index)), width="stretch")
 
 
