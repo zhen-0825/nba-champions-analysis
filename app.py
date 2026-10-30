@@ -130,6 +130,14 @@ section[data-testid="stSidebar"] hr { border-color: #241b38 !important; }
 .logo-name { font-size: 1.5rem; font-weight: 900; letter-spacing: 0.01em; line-height: 1.05; }
 .logo-name .z { color: #8b5cf6 !important; } .logo-name .h { color: #ffffff !important; }
 .logo-tag { font-size: 0.62rem; letter-spacing: 0.22em; color: #8d86a3 !important; margin-top: 2px; }
+/* 標誌就是「回首頁」按鈕：一顆看不見的按鈕疊在標誌上面（按鈕本身不能放圖片），按標誌就回首頁 */
+.logo { padding: 6px 8px; margin: 0 0 12px 0; border-radius: 12px; transition: background 0.15s ease; }
+.st-key-nav_home { margin-top: -66px; height: 62px; position: relative; z-index: 2; }
+.st-key-nav_home button, .st-key-nav_home button:hover, .st-key-nav_home button:active {
+  height: 62px; background: transparent !important; border: none !important; box-shadow: none !important; cursor: pointer; }
+.st-key-nav_home button p { color: transparent !important; }          /* 按鈕文字隱藏，只看得到標誌 */
+.st-key-nav_home button:focus-visible { outline: 2px solid #a78bfa; }  /* 用鍵盤切換時仍看得到框線 */
+section[data-testid="stSidebar"] [data-testid="stVerticalBlock"]:has(.st-key-nav_home button:hover) .logo { background: #1c1529; }
 .nav-group { font-size: 0.72rem; letter-spacing: 0.16em; color: #8d86a3 !important; margin: 18px 0 4px 12px; }
 section[data-testid="stSidebar"] .stButton > button {
   justify-content: flex-start; text-align: left; border-radius: 10px; padding: 0.5rem 0.9rem;
@@ -612,8 +620,7 @@ with st.sidebar:
                 '<div><div class="logo-name"><span class="z">Z</span><span class="h">he</span>'
                 '<span class="z">N</span></div><div class="logo-tag">NBA 冠軍數據分析</div></div></div>',
                 unsafe_allow_html=True)
-    st.button("首頁", key="nav_home", width="stretch", on_click=goto, args=(HOME,),
-              type="primary" if PAGE == HOME else "secondary")
+    st.button("回到首頁", key="nav_home", width="stretch", on_click=goto, args=(HOME,), help="回到首頁")
     for grp in dict.fromkeys(p[0] for p in PAGES):     # 依序列出三個群組
         st.markdown(f'<div class="nav-group">{grp}</div>', unsafe_allow_html=True)
         for _, name, *_ in [p for p in PAGES if p[0] == grp]:
