@@ -3,6 +3,7 @@
 
   recap_team_games    每場比賽 × 每支球隊一筆（比分、勝負、命中、失誤…）
   recap_player_games  每場比賽 × 每位球員一筆（得分、籃板、助攻、三分…）
+  recap_schedule      接下來 7 天的賽程（誰打誰），給「下一場預測」用
 
 只要呼叫 NBA 幾次（每種比賽類型：球隊一次、球員一次），每天跑也很快。
 平常由 daily_update.py 自動執行；也可以手動：
@@ -10,7 +11,7 @@
   python load_recap.py --season 2025-26  抓指定球季
   python load_recap.py --dry-run       試跑：只抓資料、算筆數，不寫進資料庫
 
-需要先在 Supabase 的 SQL Editor 執行過 schema_recap.sql
+需要先在 Supabase 的 SQL Editor 執行過 schema_recap.sql、schema_schedule.sql
 """
 
 import argparse
@@ -87,6 +88,89 @@ def load_recap(client, season):
         upsert(client, "recap_player_games", p, "game_id,player_id")
 
 
+SCHEDULE_DAYS = 7   # 抓今天起幾天的賽程
+
+
+def team_maps():
+    from nba_api.stats.static import teams
+    t = teams.get_teams()
+    return {x["id"]: x["abbreviation"] for x in t}
+
+
+def find_col(df, *names):
+    """NBA 不同資料端點的欄位名稱寫法不一樣，依序找第一個存在的"""
+    low = {c.lower(): c for c in df.columns}
+    for n in names:
+        if n.lower() in low:
+            return low[n.lower()]
+    return None
+
+
+def schedule_from_season(season):
+    """方法一：整季賽程表（ScheduleLeagueV2），一次拿回全部比賽"""
+    from nba_api.stats.endpoints import scheduleleaguev2
+
+    frames = scheduleleaguev2.ScheduleLeagueV2(league_id="00", season=season, timeout=TIMEOUT).get_data_frames()
+    df = frames[0]
+    gid = find_col(df, "gameId")
+    gdate = find_col(df, "gameDateEst", "gameDate")
+    hid, aid = find_col(df, "homeTeam_teamId"), find_col(df, "awayTeam_teamId")
+    status = find_col(df, "gameStatusText")
+    if not all([gid, gdate, hid, aid]):
+        raise ValueError(f"賽程表欄位和預期不同：{list(df.columns)[:12]}")
+    return pd.DataFrame({"game_id": df[gid].astype(str).str.zfill(10),
+                         "game_date": pd.to_datetime(df[gdate], errors="coerce"),
+                         "home_team_id": pd.to_numeric(df[hid], errors="coerce"),
+                         "away_team_id": pd.to_numeric(df[aid], errors="coerce"),
+                         "status": df[status] if status else None})
+
+
+def schedule_from_scoreboard(days):
+    """方法二（備案）：一天一天問「這天有哪些比賽」（ScoreboardV2）"""
+    from nba_api.stats.endpoints import scoreboardv2
+
+    rows = []
+    for d in days:
+        time.sleep(REQUEST_DELAY)
+        gh = scoreboardv2.ScoreboardV2(game_date=d.strftime("%Y-%m-%d"), timeout=TIMEOUT).get_data_frames()[0]
+        for _, r in gh.iterrows():
+            rows.append({"game_id": str(r["GAME_ID"]).zfill(10), "game_date": pd.Timestamp(d),
+                         "home_team_id": r["HOME_TEAM_ID"], "away_team_id": r["VISITOR_TEAM_ID"],
+                         "status": r.get("GAME_STATUS_TEXT")})
+    return pd.DataFrame(rows)
+
+
+def load_schedule(client, season):
+    """抓接下來 7 天的賽程。美國日期比台灣晚一天左右，所以從「昨天」開始抓"""
+    start = pd.Timestamp(date.today()) - pd.Timedelta(days=1)
+    days = [start + pd.Timedelta(days=i) for i in range(SCHEDULE_DAYS + 1)]
+    print(f"  賽程 {days[0]:%m/%d}～{days[-1]:%m/%d}")
+    sched = None
+    try:
+        sched = schedule_from_season(season)
+        sched = sched[(sched["game_date"] >= days[0]) & (sched["game_date"] <= days[-1])]
+    except Exception as e:
+        print(f"    整季賽程表讀取失敗（{type(e).__name__}），改用逐日查詢")
+        try:
+            sched = schedule_from_scoreboard(days)
+        except Exception as e2:
+            print(f"    逐日查詢也失敗：{type(e2).__name__}，這次先略過賽程")
+            return
+    if sched is None or sched.empty:
+        print("    這段期間沒有比賽")
+        return
+    abbr = team_maps()
+    sched = sched.dropna(subset=["game_date", "home_team_id", "away_team_id"]).copy()
+    sched["home_team_id"] = sched["home_team_id"].astype("int64")
+    sched["away_team_id"] = sched["away_team_id"].astype("int64")
+    sched["home_abbr"] = sched["home_team_id"].map(abbr)
+    sched["away_abbr"] = sched["away_team_id"].map(abbr)
+    sched = sched.dropna(subset=["home_abbr", "away_abbr"])     # 明星賽等非正式球隊不要
+    sched["game_date"] = sched["game_date"].dt.strftime("%Y-%m-%d")
+    sched.insert(1, "season", season)
+    upsert(client, "recap_schedule", sched.drop_duplicates("game_id"), "game_id")
+
+
 def main():
     parser = argparse.ArgumentParser(description="抓全聯盟本季逐場比分與球員數據（每日戰報用）")
     parser.add_argument("--season", default=season_of(date.today()), help="球季，例如 2026-27（預設：這一季）")
@@ -96,6 +180,11 @@ def main():
     client = None if args.dry_run else connect()
     print(f"===== 每日戰報資料：{args.season} =====" + ("　【試跑模式】" if args.dry_run else ""))
     load_recap(client, args.season)
+    if args.season == season_of(date.today()):      # 只有進行中的球季才需要未來賽程
+        try:
+            load_schedule(client, args.season)
+        except Exception as e:                        # 賽程表還沒建立等狀況：不影響比分資料
+            print(f"    賽程寫入失敗，略過：{str(e)[:120]}")
     print("\n全部完成！")
 
 
