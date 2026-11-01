@@ -1352,16 +1352,33 @@ if PAGE == "每日戰報":
         only_today = seg("顯示", ["今天有比賽的球隊", "全聯盟"], "rc_cc")
         if only_today == "今天有比賽的球隊":
             cc = [c for c in cc if c["played_today"]]
-        if not cc:
-            st.caption("目前沒有明顯的隱憂（開季前幾場只看連敗與主力缺陣，第 6 場後才比較近況）。")
-        else:
+        scope = tg[(tg["game_date"] <= day) & (tg["season_type"] == "Regular Season")]
+        if only_today == "今天有比賽的球隊":
+            scope = scope[scope["abbreviation"].isin(set(today["abbreviation"]))]
+        all_abbr = sorted(set(scope["abbreviation"]))
+        flagged = {c["abbr"] for c in cc}
+        calm = [a_ for a_ in all_abbr if a_ not in flagged]
+        st.caption(f"{len(all_abbr)} 隊中有 {len(cc)} 隊出現隱憂，依嚴重程度排序。"
+                   "開季前 6 場只看連敗、主力未出賽、得分手低迷；打滿 6 場後才加上「近 5 場 vs 本季平均」的比較。")
+
+        def concern_cards(items):
             cols = st.columns(2, gap="medium")
-            for i, c in enumerate(cc[:10]):
+            for i, c in enumerate(items):
                 cols[i % 2].markdown(
                     f'<div class="rc-c" style="border-left-color:{TEAM_COLORS.get(c["abbr"], "#c8102e")}">'
                     f'<div class="top">{badge(c["abbr"], 32)}<span class="nm">{team_label(c["abbr"])}</span>'
                     f'<span class="rec">{c["record"]}</span></div>'
                     f'<ul>{"".join(f"<li>{t}</li>" for t in c["items"])}</ul></div>', unsafe_allow_html=True)
+
+        if not cc:
+            st.caption("目前沒有明顯的隱憂。")
+        else:
+            concern_cards(cc[:10])
+            if len(cc) > 10:
+                with st.expander(f"展開其餘 {len(cc) - 10} 隊"):
+                    concern_cards(cc[10:])
+        if calm:
+            st.caption("目前沒有隱憂：" + "、".join(team_label(a_) for a_ in calm))
 
         # ---- 4. 戰績榜 ----
         section("戰績榜", f"{season} 例行賽，到 {day:%m/%d} 為止；勝差以各區第一名為準")
