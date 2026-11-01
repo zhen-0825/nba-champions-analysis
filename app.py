@@ -1143,7 +1143,7 @@ def standouts(day_rows, season_avg):
         if base is not None and r.pts >= base + 12 and r.pts >= 20:
             tags.append(f"比平常多 {r.pts - base:.0f} 分"); score += 3
             if base < 12:
-                tags.append("新面孔"); score += 1
+                tags.append("超常發揮"); score += 1
         if r.stl + r.blk >= 6:
             tags.append(f"抄截＋阻攻 {int(r.stl + r.blk)}"); score += 2
         if tags:
@@ -1352,16 +1352,33 @@ if PAGE == "每日戰報":
         only_today = seg("顯示", ["今天有比賽的球隊", "全聯盟"], "rc_cc")
         if only_today == "今天有比賽的球隊":
             cc = [c for c in cc if c["played_today"]]
-        if not cc:
-            st.caption("目前沒有明顯的隱憂（開季前幾場只看連敗與主力缺陣，第 6 場後才比較近況）。")
-        else:
+        scope = tg[(tg["game_date"] <= day) & (tg["season_type"] == "Regular Season")]
+        if only_today == "今天有比賽的球隊":
+            scope = scope[scope["abbreviation"].isin(set(today["abbreviation"]))]
+        all_abbr = sorted(set(scope["abbreviation"]))
+        flagged = {c["abbr"] for c in cc}
+        calm = [a_ for a_ in all_abbr if a_ not in flagged]
+        st.caption(f"{len(all_abbr)} 隊中有 {len(cc)} 隊出現隱憂，依嚴重程度排序。"
+                   "開季前 6 場只看連敗、主力未出賽、得分手低迷；打滿 6 場後才加上「近 5 場 vs 本季平均」的比較。")
+
+        def concern_cards(items):
             cols = st.columns(2, gap="medium")
-            for i, c in enumerate(cc[:10]):
+            for i, c in enumerate(items):
                 cols[i % 2].markdown(
                     f'<div class="rc-c" style="border-left-color:{TEAM_COLORS.get(c["abbr"], "#c8102e")}">'
                     f'<div class="top">{badge(c["abbr"], 32)}<span class="nm">{team_label(c["abbr"])}</span>'
                     f'<span class="rec">{c["record"]}</span></div>'
                     f'<ul>{"".join(f"<li>{t}</li>" for t in c["items"])}</ul></div>', unsafe_allow_html=True)
+
+        if not cc:
+            st.caption("目前沒有明顯的隱憂。")
+        else:
+            concern_cards(cc[:10])
+            if len(cc) > 10:
+                with st.expander(f"展開其餘 {len(cc) - 10} 隊"):
+                    concern_cards(cc[10:])
+        if calm:
+            st.caption("目前沒有隱憂：" + "、".join(team_label(a_) for a_ in calm))
 
         # ---- 4. 戰績榜 ----
         section("戰績榜", f"{season} 例行賽，到 {day:%m/%d} 為止；勝差以各區第一名為準")
@@ -1380,7 +1397,7 @@ if PAGE == "每日戰報":
             st.markdown("""
 - **資料**：NBA 官方數據 LeagueGameLog（全聯盟每場比賽的球隊與球員數據），每天由電腦上的 `daily_update.py` 自動抓進 `recap_team_games`、`recap_player_games`。日期是**美國比賽日**（台灣時間通常是隔天早上）。
 - **每場最佳球員**：用 Game Score（得分＋命中＋籃板＋助攻＋抄截＋阻攻，扣掉投失、失誤、犯規）挑出綜合表現最好的人。
-- **值得關注**：40 分以上、30 分以上、大三元、單場 7 記三分以上、真實命中率 70% 以上（至少 12 次出手）、比自己本季平常多 12 分以上（平常不到 12 分的標「新面孔」）、抄截＋阻攻 6 次以上。
+- **值得關注**：40 分以上、30 分以上、大三元、單場 7 記三分以上、真實命中率 70% 以上（至少 12 次出手）、比自己本季平常多 12 分以上（平常不到 12 分的標「超常發揮」：角色球員今天跳出來）、抄截＋阻攻 6 次以上。
 - **球隊隱憂**：3 連敗以上；打滿 6 場後，比較最近 5 場和本季平均：失分多 6 分以上、三分命中率低 4 個百分點以上、失誤多 2.5 次以上、淨勝分少 8 分以上；本季上場時間最多的球員上一場沒有出賽；本季得分最多的球員近 3 場得分不到平常的 7 成。
 - **沒有的資料**：官方傷兵名單與原因、NBA 盃分組戰績（沒有分組資料），所以「未出賽」只說明沒有上場，不代表一定受傷。
 """)
