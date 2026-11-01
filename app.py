@@ -571,6 +571,8 @@ LOGO_B64 = "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MCIg
 
 # （群組, 頁面名稱, 這頁回答的問題, 卡片說明, 這頁要用到哪些篩選）
 PAGES = [
+    ("今日", "每日戰報", "昨晚發生什麼事？",
+     "全聯盟比分卡、值得關注的球員、球隊隱憂與東西區戰績榜，每天自動更新。", set()),
     ("冠軍故事", "冠軍密碼", "奪冠最需要什麼？",
      "冠軍在攻守效率、三分、籃板等 10 項指標排聯盟第幾；三分時代與冠軍輪替。", {"season"}),
     ("冠軍故事", "投籃分布", "冠軍從哪裡出手？",
@@ -1020,6 +1022,368 @@ if PAGE == "冠軍密碼":
             fig.update_xaxes(showgrid=False, side="top")
             st.plotly_chart(style(fig, 90 + 46 * len(labels)), width="stretch")
             st.caption("讀法：如果每一列亮的位置都不同，代表冠軍靠的是不同的打法，沒有單一的致勝公式。")
+
+
+# ---------- 每日戰報：昨晚發生什麼事？（全聯盟比分、值得關注的球員、球隊隱憂、戰績榜）----------
+EAST = {"ATL", "BOS", "BKN", "CHA", "CHI", "CLE", "DET", "IND", "MIA", "MIL", "NYK", "ORL", "PHI", "TOR", "WAS"}
+RECAP_TYPES = {"Regular Season": "例行賽", "PlayIn": "附加賽", "Playoffs": "季後賽"}
+
+
+def _read_filtered(table, filters, order, page=1000):
+    """分頁讀取＋篩選；資料表不存在或連線出錯時回傳空表格（畫面會提示要先載入資料）"""
+    rows, start = [], 0
+    try:
+        while True:
+            q = get_client().table(table).select("*")
+            for op, col, val in filters:
+                q = getattr(q, op)(col, val)
+            for c in order:
+                q = q.order(c)
+            part = q.range(start, start + page - 1).execute().data
+            rows += part
+            if len(part) < page:
+                break
+            start += page
+    except Exception:
+        return pd.DataFrame()
+    return pd.DataFrame(rows)
+
+
+@st.cache_data(ttl=900, show_spinner="讀取本季比分中…")
+def load_recap_teams():
+    """全聯盟本季（最新球季）每場比賽 × 每隊；一季約 2,500 筆"""
+    try:
+        latest = (get_client().table("recap_team_games").select("season")
+                  .order("season", desc=True).limit(1).execute().data)
+    except Exception:
+        return pd.DataFrame()
+    if not latest:
+        return pd.DataFrame()
+    df = _read_filtered("recap_team_games", [("eq", "season", latest[0]["season"])],
+                        ["game_date", "game_id", "team_id"])
+    if not df.empty:
+        df["game_date"] = pd.to_datetime(df["game_date"])
+    return df
+
+
+@st.cache_data(ttl=900, show_spinner="讀取球員數據中…")
+def load_recap_players(season, since):
+    """某球季、某天之後的球員逐場（只讀最近兩週，不用每次搬整季）"""
+    df = _read_filtered("recap_player_games", [("eq", "season", season), ("gte", "game_date", since)],
+                        ["game_date", "game_id", "player_id"])
+    if not df.empty:
+        df["game_date"] = pd.to_datetime(df["game_date"])
+    return df
+
+
+@st.cache_data(ttl=900)
+def load_recap_season(season):
+    return _read_filtered("recap_player_season", [("eq", "season", season)], ["player_id", "team_id"])
+
+
+def badge(abbr, size=46):
+    """球隊徽章：球衣主色的圓角方塊＋縮寫（不用官方隊徽，避免商標問題）"""
+    c = TEAM_COLORS.get(abbr, "#4b4560")
+    return (f'<div class="rc-badge" style="background:{c};width:{size}px;height:{size}px;'
+            f'font-size:{size * 0.3:.0f}px">{abbr}</div>')
+
+
+def record_through(tg, abbr, day):
+    """某隊到某一天為止的戰績（含當天）"""
+    d = tg[(tg["abbreviation"] == abbr) & (tg["game_date"] <= day) & (tg["season_type"] == "Regular Season")]
+    return f'{int((d["wl"] == "W").sum())}-{int((d["wl"] == "L").sum())}'
+
+
+def stat_line(r):
+    """球員數據：只列有亮點的項目，像 NBA 官方圖卡"""
+    parts = [f'<b>{int(r.pts)}</b> 分']
+    if r.reb >= 5:
+        parts.append(f'<b>{int(r.reb)}</b> 籃板')
+    if r.ast >= 5:
+        parts.append(f'<b>{int(r.ast)}</b> 助攻')
+    if r.fg3m >= 4:
+        parts.append(f'<b>{int(r.fg3m)}</b> 三分')
+    if r.stl >= 3:
+        parts.append(f'<b>{int(r.stl)}</b> 抄截')
+    if r.blk >= 3:
+        parts.append(f'<b>{int(r.blk)}</b> 阻攻')
+    return "　".join(parts)
+
+
+def game_score(r):
+    """一場表現的綜合分數（Hollinger Game Score 簡化版），用來挑每場的最佳球員"""
+    return (r.pts + 0.4 * r.fgm - 0.7 * r.fga - 0.4 * (r.fta - r.ftm) + 0.7 * r.oreb + 0.3 * r.dreb
+            + r.stl + 0.7 * r.ast + 0.7 * r.blk - 0.4 * r.pf - r.tov)
+
+
+def standouts(day_rows, season_avg):
+    """依規則找出值得關注的球員：每條規則都寫得出原因，不是黑盒子"""
+    out = []
+    avg = season_avg.set_index(["player_id", "team_id"]) if not season_avg.empty else None
+    for _, r in day_rows.iterrows():
+        tags, score = [], 0
+        fga_fta = r.fga + 0.44 * r.fta
+        ts = r.pts / (2 * fga_fta) if fga_fta > 0 else None
+        doubles = sum(v >= 10 for v in [r.pts, r.reb, r.ast, r.stl, r.blk])
+        base = None
+        if avg is not None and (r.player_id, r.team_id) in avg.index:
+            a = avg.loc[(r.player_id, r.team_id)]
+            if a.gp >= 3:   # 扣掉今天這場，算「平常」場均
+                base = (a.pts - r.pts) / (a.gp - 1)
+        if r.pts >= 40:
+            tags.append(f"{int(r.pts)} 分爆發"); score += 4
+        elif r.pts >= 30:
+            tags.append(f"{int(r.pts)} 分"); score += 2
+        if doubles >= 3:
+            tags.append("大三元"); score += 4
+        if r.fg3m >= 7:
+            tags.append(f"{int(r.fg3m)} 記三分"); score += 2
+        if ts and ts >= 0.70 and r.fga >= 12:
+            tags.append(f"真實命中率 {ts:.0%}"); score += 2
+        if base is not None and r.pts >= base + 12 and r.pts >= 20:
+            tags.append(f"比平常多 {r.pts - base:.0f} 分"); score += 3
+            if base < 12:
+                tags.append("新面孔"); score += 1
+        if r.stl + r.blk >= 6:
+            tags.append(f"抄截＋阻攻 {int(r.stl + r.blk)}"); score += 2
+        if tags:
+            out.append({**r.to_dict(), "tags": tags, "score": score + game_score(r) / 20, "base": base})
+    return sorted(out, key=lambda x: -x["score"])
+
+
+def team_concerns(tg, pl, season_avg, day):
+    """球隊隱憂：比較「最近幾場」和「本季平均」，加上連敗與主力缺陣；每條都附數字"""
+    out = []
+    reg = tg[(tg["game_date"] <= day) & (tg["season_type"] == "Regular Season")]
+    for abbr, g in reg.groupby("abbreviation"):
+        g = g.sort_values("game_date")
+        n, items = len(g), []
+        # 連敗
+        streak = 0
+        for wl in g["wl"][::-1]:
+            if wl != "L":
+                break
+            streak += 1
+        if streak >= 3:
+            items.append((3 + streak - 3, f"{streak} 連敗"))
+        if n >= 6:   # 開季太早，近況和平均幾乎一樣，不比
+            last, allg = g.tail(5), g
+            d_opp = last["opp_pts"].mean() - allg["opp_pts"].mean()
+            if d_opp >= 6:
+                items.append((2, f"防守下滑：近 5 場失分 {last['opp_pts'].mean():.0f}，比本季平均多 {d_opp:.0f}"))
+            p3_l = last["fg3m"].sum() / max(last["fg3a"].sum(), 1)
+            p3_a = allg["fg3m"].sum() / max(allg["fg3a"].sum(), 1)
+            if p3_a - p3_l >= 0.04:
+                items.append((2, f"三分失準：近 5 場 {p3_l:.1%}，本季 {p3_a:.1%}"))
+            d_tov = last["tov"].mean() - allg["tov"].mean()
+            if d_tov >= 2.5:
+                items.append((1, f"失誤變多：近 5 場每場 {last['tov'].mean():.1f} 次（多 {d_tov:.1f}）"))
+            d_pm = last["plus_minus"].mean() - allg["plus_minus"].mean()
+            if d_pm <= -8:
+                items.append((2, f"近況變差：近 5 場淨勝分 {last['plus_minus'].mean():+.1f}，本季 {allg['plus_minus'].mean():+.1f}"))
+        # 主力：這隊本季場均上場最多的球員
+        if not season_avg.empty and not pl.empty:
+            sa = season_avg[(season_avg["abbreviation"] == abbr) & (season_avg["gp"] >= 2)].copy()
+            if not sa.empty:
+                sa["mpg"] = sa["min"] / sa["gp"]
+                sa["ppg"] = sa["pts"] / sa["gp"]
+                star = sa.sort_values("mpg").iloc[-1]
+                last_game = g.iloc[-1]["game_id"]
+                played = set(pl[pl["game_id"] == last_game]["player_id"])
+                if pl["game_id"].eq(last_game).any() and star.player_id not in played:
+                    items.append((3, f"主力未出賽：{star.player_name}（場均 {star.mpg:.0f} 分鐘）上一場沒有上場"))
+                top = sa.sort_values("ppg").iloc[-1]
+                rec = pl[(pl["player_id"] == top.player_id) & (pl["abbreviation"] == abbr)].sort_values("game_date").tail(3)
+                if len(rec) == 3 and top.gp >= 6 and rec["pts"].mean() < top.ppg * 0.7:
+                    items.append((2, f"得分手低迷：{top.player_name} 近 3 場 {rec['pts'].mean():.1f} 分，本季 {top.ppg:.1f} 分"))
+        if items:
+            items.sort(key=lambda x: -x[0])
+            w, l = int((g["wl"] == "W").sum()), int((g["wl"] == "L").sum())
+            out.append({"abbr": abbr, "record": f"{w}-{l}", "items": [t for _, t in items],
+                        "severity": sum(s for s, _ in items), "played_today": (g["game_date"] == day).any()})
+    return sorted(out, key=lambda x: (-x["severity"], x["abbr"]))
+
+
+def standings(tg, day, conf):
+    reg = tg[(tg["game_date"] <= day) & (tg["season_type"] == "Regular Season")]
+    rows = []
+    for abbr, g in reg.groupby("abbreviation"):
+        if (abbr in EAST) != (conf == "東區"):
+            continue
+        g = g.sort_values("game_date")
+        w, l = int((g["wl"] == "W").sum()), int((g["wl"] == "L").sum())
+        s, last = 0, None
+        for wl in g["wl"][::-1]:
+            if last is None:
+                last = wl
+            if wl != last:
+                break
+            s += 1
+        l10 = g.tail(10)
+        rows.append({"_key": abbr, "球隊": team_label(abbr), "勝": w, "敗": l, "_pct": w / max(w + l, 1),
+                     "勝率": f"{w / max(w + l, 1):.3f}".lstrip("0") if w + l else "-",
+                     "近 10 場": f'{int((l10["wl"] == "W").sum())}-{int((l10["wl"] == "L").sum())}',
+                     "連勝敗": f"{'連勝' if last == 'W' else '連敗'} {s}" if last else "-",
+                     "場均淨勝": f"{g['plus_minus'].mean():+.1f}"})
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows).sort_values(["_pct", "勝"], ascending=[False, False]).reset_index(drop=True)
+    lead = df.iloc[0]
+    df["勝差"] = [("-" if i == 0 else f"{((lead['勝'] - r['勝']) + (r['敗'] - lead['敗'])) / 2:g}")
+                  for i, r in df.iterrows()]
+    df.insert(0, "#", range(1, len(df) + 1))
+    return df[["#", "_key", "球隊", "勝", "敗", "勝率", "勝差", "近 10 場", "連勝敗", "場均淨勝"]]
+
+
+if PAGE == "每日戰報":
+    st.markdown("""
+<style>
+.rc-grid-note { color: var(--muted); font-size: 0.82rem; margin: -2px 0 10px 0; }
+.rc-card { background: #0d0a14; border-radius: 14px; padding: 14px 16px 12px; margin-bottom: 14px;
+           border: 1px solid #241b38; }
+.rc-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.rc-team { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 64px; }
+.rc-badge { border-radius: 10px; display: flex; align-items: center; justify-content: center;
+            color: #ffffff; font-weight: 900; letter-spacing: 0.02em; box-shadow: inset 0 0 0 2px rgba(255,255,255,0.18); }
+.rc-rec { color: #b9b1cf; font-size: 0.74rem; font-variant-numeric: tabular-nums; }
+.rc-score { font-size: 2.2rem; font-weight: 900; font-variant-numeric: tabular-nums; line-height: 1; }
+.rc-win { color: #ffffff; } .rc-lose { color: #6f6883; }
+.rc-final { color: #a78bfa; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.16em; text-align: center; }
+.rc-final small { display: block; color: #6f6883; letter-spacing: 0.02em; font-weight: 500; margin-top: 2px; }
+.rc-star { border-top: 1px solid #241b38; margin-top: 12px; padding-top: 9px; color: #d9d0f5; font-size: 0.84rem; }
+.rc-star .nm { color: #ffffff; font-weight: 700; margin-right: 6px; }
+.rc-star b { color: #ffffff; font-size: 1rem; }
+.rc-hero { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-bottom: 8px; }
+.rc-p { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }
+.rc-p .top { display: flex; align-items: center; gap: 10px; }
+.rc-p .nm { font-weight: 900; color: var(--ink); font-size: 1.02rem; line-height: 1.2; }
+.rc-p .sub { color: var(--muted); font-size: 0.78rem; }
+.rc-p .line { margin: 10px 0 8px 0; color: var(--ink-2); font-size: 0.9rem; }
+.rc-p .line b { color: var(--ink); font-size: 1.25rem; font-weight: 900; }
+.rc-tag { display: inline-block; font-size: 0.74rem; font-weight: 700; color: #4c1d95; background: var(--brand-soft);
+          border: 1px solid #ddd0fb; border-radius: 999px; padding: 2px 9px; margin: 0 6px 6px 0; }
+.rc-c { background: var(--surface); border: 1px solid var(--line); border-left: 4px solid #c8102e;
+        border-radius: 12px; padding: 12px 16px; margin-bottom: 10px; }
+.rc-c .top { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.rc-c .nm { font-weight: 900; color: var(--ink); }
+.rc-c .rec { color: var(--muted); font-size: 0.8rem; }
+.rc-c ul { margin: 0 0 0 4px; padding-left: 18px; } .rc-c li { color: var(--ink-2); font-size: 0.88rem; margin: 2px 0; }
+</style>
+""", unsafe_allow_html=True)
+
+    tg = load_recap_teams()
+    if tg.empty:
+        st.info("尚未載入資料。請先在 Supabase 執行 schema_recap.sql，再在電腦上執行：python load_recap.py")
+    else:
+        season = tg["season"].iloc[0]
+        dates = sorted(tg["game_date"].unique(), reverse=True)
+        labels = {d: pd.Timestamp(d).strftime("%m/%d") for d in dates[:10]}
+        pick = pills("比賽日（美國時間）", list(labels), "rc_day", default=dates[0],
+                     format_func=lambda d: labels[d] + ("　最新" if d == dates[0] else ""))
+        day = pd.Timestamp(pick)
+        since = (day - pd.Timedelta(days=21)).strftime("%Y-%m-%d")
+        pl = load_recap_players(season, since)
+        sa = load_recap_season(season)
+        today = tg[tg["game_date"] == day]
+        day_pl = pl[pl["game_date"] == day] if not pl.empty else pl
+
+        # ---- 三行重點：先讀結論 ----
+        games = today.groupby("game_id")
+        margins = games["plus_minus"].max()
+        top = None
+        if not day_pl.empty:
+            dp = day_pl.copy()
+            dp["gs"] = [game_score(r) for r in dp.itertuples()]
+            top = dp.sort_values("gs").iloc[-1]
+        lines = [f"<b>{day:%m/%d}</b> 共 <b>{games.ngroups}</b> 場比賽"
+                 + (f"；分差最大的一場贏 <b>{int(margins.max())}</b> 分，最膠著的一場只差 <b>{int(margins.min())}</b> 分。"
+                    if len(margins) else "。")]
+        if top is not None:
+            lines.append(f"今日最佳：<b>{top.player_name}</b>（{team_label(top.abbreviation)}）"
+                         f" {int(top.pts)} 分 {int(top.reb)} 籃板 {int(top.ast)} 助攻。")
+        insight(lines)
+
+        # ---- 1. 比分卡：一場一張，像 NBA 官方圖卡 ----
+        section("比分", "左邊客隊、右邊主隊；下方是這場表現最好的球員（綜合得分、籃板、助攻、效率）")
+        cards = []
+        for gid, g in games:
+            if len(g) < 2:
+                continue
+            away = g[~g["is_home"].astype(bool)].iloc[0] if (~g["is_home"].astype(bool)).any() else g.iloc[0]
+            home = g[g["is_home"].astype(bool)].iloc[0] if g["is_home"].astype(bool).any() else g.iloc[1]
+            star_html = ""
+            if not day_pl.empty:
+                gp_ = day_pl[day_pl["game_id"] == gid]
+                if not gp_.empty:
+                    s = max(gp_.itertuples(), key=game_score)
+                    star_html = (f'<div class="rc-star"><span class="nm">{s.player_name}</span>'
+                                 f'<span style="color:#8d86a3">{s.abbreviation}</span>　{stat_line(s)}</div>')
+            ot = int(round((float(home["min"] or 240) - 240) / 25)) if pd.notna(home.get("min")) else 0
+            tag = RECAP_TYPES.get(home["season_type"], "")
+            cards.append(f'''<div class="rc-card"><div class="rc-row">
+  <div class="rc-team">{badge(away["abbreviation"])}<div class="rc-rec">{record_through(tg, away["abbreviation"], day)}</div></div>
+  <div class="rc-score {'rc-win' if away['wl'] == 'W' else 'rc-lose'}">{int(away["pts"])}</div>
+  <div class="rc-final">FINAL{f"／OT{ot if ot > 1 else ''}" if ot > 0 else ""}<small>{tag}</small></div>
+  <div class="rc-score {'rc-win' if home['wl'] == 'W' else 'rc-lose'}">{int(home["pts"])}</div>
+  <div class="rc-team">{badge(home["abbreviation"])}<div class="rc-rec">{record_through(tg, home["abbreviation"], day)}</div></div>
+</div>{star_html}</div>''')
+        cols = st.columns(3, gap="medium")
+        for i, c in enumerate(cards):
+            cols[i % 3].markdown(c, unsafe_allow_html=True)
+
+        # ---- 2. 值得關注的球員 ----
+        section("值得關注的球員", "每位都寫出被選上的原因：爆發、大三元、三分雨、高效率、比自己平常多很多…")
+        so = standouts(day_pl, sa) if not day_pl.empty else []
+        if not so:
+            st.caption("這一天沒有符合條件的突出表現。")
+        else:
+            html = []
+            for r in so[:8]:
+                base = f"本季平常 {r['base']:.1f} 分" if r["base"] is not None else "本季前幾場"
+                html.append(f'''<div class="rc-p"><div class="top">{badge(r["abbreviation"], 38)}
+<div><div class="nm">{r["player_name"]}</div><div class="sub">{team_label(r["abbreviation"])}・{r["matchup"]}・{"勝" if r["wl"] == "W" else "敗"}</div></div></div>
+<div class="line">{stat_line(pd.Series(r))}　<span style="color:var(--muted);font-size:0.78rem">{base}</span></div>
+<div>{"".join(f'<span class="rc-tag">{t}</span>' for t in r["tags"])}</div></div>''')
+            st.markdown(f'<div class="rc-hero">{"".join(html)}</div>', unsafe_allow_html=True)
+
+        # ---- 3. 球隊隱憂 ----
+        section("球隊隱憂", "比較每隊「最近 5 場」和「本季平均」：防守、三分、失誤、淨勝分變差，或連敗、主力未出賽、得分手低迷")
+        cc = team_concerns(tg, pl, sa, day)
+        only_today = seg("顯示", ["今天有比賽的球隊", "全聯盟"], "rc_cc")
+        if only_today == "今天有比賽的球隊":
+            cc = [c for c in cc if c["played_today"]]
+        if not cc:
+            st.caption("目前沒有明顯的隱憂（開季前幾場只看連敗與主力缺陣，第 6 場後才比較近況）。")
+        else:
+            cols = st.columns(2, gap="medium")
+            for i, c in enumerate(cc[:10]):
+                cols[i % 2].markdown(
+                    f'<div class="rc-c" style="border-left-color:{TEAM_COLORS.get(c["abbr"], "#c8102e")}">'
+                    f'<div class="top">{badge(c["abbr"], 32)}<span class="nm">{team_label(c["abbr"])}</span>'
+                    f'<span class="rec">{c["record"]}</span></div>'
+                    f'<ul>{"".join(f"<li>{t}</li>" for t in c["items"])}</ul></div>', unsafe_allow_html=True)
+
+        # ---- 4. 戰績榜 ----
+        section("戰績榜", f"{season} 例行賽，到 {day:%m/%d} 為止；勝差以各區第一名為準")
+        left, right = st.columns(2, gap="large")
+        for col, conf in [(left, "東區"), (right, "西區")]:
+            with col:
+                st.markdown(f"**{conf}**")
+                tb = standings(tg, day, conf)
+                if tb.empty:
+                    st.caption("還沒有比賽。")
+                else:
+                    nice_table(tb, num_cols=("#", "勝", "敗", "勝率", "勝差", "場均淨勝"),
+                               signed_cols=("場均淨勝",), dot_col="球隊", colors=TEAM_COLORS)
+
+        with st.expander("資料來源與方法"):
+            st.markdown("""
+- **資料**：NBA 官方數據 LeagueGameLog（全聯盟每場比賽的球隊與球員數據），每天由電腦上的 `daily_update.py` 自動抓進 `recap_team_games`、`recap_player_games`。日期是**美國比賽日**（台灣時間通常是隔天早上）。
+- **每場最佳球員**：用 Game Score（得分＋命中＋籃板＋助攻＋抄截＋阻攻，扣掉投失、失誤、犯規）挑出綜合表現最好的人。
+- **值得關注**：40 分以上、30 分以上、大三元、單場 7 記三分以上、真實命中率 70% 以上（至少 12 次出手）、比自己本季平常多 12 分以上（平常不到 12 分的標「新面孔」）、抄截＋阻攻 6 次以上。
+- **球隊隱憂**：3 連敗以上；打滿 6 場後，比較最近 5 場和本季平均：失分多 6 分以上、三分命中率低 4 個百分點以上、失誤多 2.5 次以上、淨勝分少 8 分以上；本季上場時間最多的球員上一場沒有出賽；本季得分最多的球員近 3 場得分不到平常的 7 成。
+- **沒有的資料**：官方傷兵名單與原因、NBA 盃分組戰績（沒有分組資料），所以「未出賽」只說明沒有上場，不代表一定受傷。
+""")
 
 
 # ---------- 投籃分布：冠軍從哪裡出手？ ----------

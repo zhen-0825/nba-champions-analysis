@@ -6,6 +6,7 @@
   python daily_update.py --dry-run   試跑：只抓資料，不寫進資料庫
 
 會依序執行：
+  0. load_recap.py                              全聯盟本季每場比分與球員數據（每日戰報）
   1. load_to_supabase.py --start <本季開始日>   八隊球員逐場數據、全聯盟球隊數據
   2. load_extra.py --current                    本季的投籃、戰術、陣容、跑動數據
   3. load_to_supabase.py --next 2               再加入 2 支還沒載入的球隊（20 季完整資料）
@@ -58,10 +59,11 @@ def main():
         title = f"===== 每日更新 {datetime.now():%Y-%m-%d %H:%M}　球季 {season} ====="
         print(title)
         log.write(title + "\n")
+        ok0 = run(["load_recap.py"] + dry, log)            # 每日戰報：全聯盟本季比分（最快，先跑）
         ok1 = run(["load_to_supabase.py", "--start", start] + dry, log)
         ok2 = run(["load_extra.py", "--current"] + dry, log)
         ok3 = run(["load_to_supabase.py", "--next", str(TEAMS_PER_DAY)] + dry, log)
-        result = "全部成功" if ok1 and ok2 and ok3 else "有部分失敗，請看上面的訊息或記錄檔"
+        result = "全部成功" if ok0 and ok1 and ok2 and ok3 else "有部分失敗，請看上面的訊息或記錄檔"
         log.write(f"\n===== 結束：{result} =====\n")
         print(f"\n===== 結束：{result} =====\n記錄檔：{log_path}")
     clean_old_logs()

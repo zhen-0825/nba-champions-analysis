@@ -43,6 +43,7 @@ Streamlit 網頁：球季趨勢、球隊 × 球季交叉分析、冠軍球季比
 | `setup_schedule.ps1` | 建立 Windows 工作排程，每天 15:30 自動執行更新 |
 | `views.sql` | 彙總檢視表（球隊球季、球員球季） |
 | `app.py` | Streamlit 網頁，從 Supabase 讀資料呈現 |
+| `load_recap.py` / `schema_recap.sql` | 每日戰報：全聯盟本季每場比分與球員數據（每天自動更新） |
 
 ## 本機執行
 
