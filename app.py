@@ -572,7 +572,7 @@ LOGO_B64 = "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MCIg
 # （群組, 頁面名稱, 這頁回答的問題, 卡片說明, 這頁要用到哪些篩選）
 PAGES = [
     ("今日", "每日戰報", "昨晚發生什麼事？",
-     "全聯盟比分卡、值得關注的球員、球隊隱憂與東西區戰績榜，每天自動更新。", set()),
+     "下一場勝率與球員預估、全聯盟比分卡、值得關注的球員、球隊隱憂與東西區戰績榜，每天自動更新。", set()),
     ("冠軍故事", "冠軍密碼", "奪冠最需要什麼？",
      "冠軍在攻守效率、三分、籃板等 10 項指標排聯盟第幾；三分時代與冠軍輪替。", {"season"}),
     ("冠軍故事", "投籃分布", "冠軍從哪裡出手？",
@@ -1235,6 +1235,205 @@ def standings(tg, day, conf):
     return df[["#", "_key", "球隊", "勝", "敗", "勝率", "勝差", "近 10 場", "連勝敗", "場均淨勝"]]
 
 
+# ---------- 每日戰報：下一場預測（比賽勝率、球員表現）----------
+HOME_EDGE = 2.5      # 主場優勢：NBA 主隊平均多贏約 2～3 分
+B2B_PENALTY = 1.5    # 背靠背（前一天才打過）少約 1.5 分
+STAR_PENALTY = 2.0   # 主力上一場沒上場，若持續缺陣少約 2 分
+GAME_SD = 12.0       # NBA 一場比賽的分差，和預測相比大約會差 ±12 分（標準差）
+SHRINK = 8           # 開季場數少，數字不穩：打 n 場只相信 n/(n+8)，其餘拉回聯盟平均
+
+
+@st.cache_data(ttl=900)
+def load_schedule_after(season, after):
+    df = _read_filtered("recap_schedule", [("eq", "season", season), ("gt", "game_date", after)],
+                        ["game_date", "game_id"])
+    if not df.empty:
+        df["game_date"] = pd.to_datetime(df["game_date"])
+    return df
+
+
+def win_prob(margin):
+    """預測分差 → 勝率：假設實際分差＝預測分差＋常態分布的誤差（標準差 12 分）"""
+    import math
+    return 0.5 * (1 + math.erf(margin / (GAME_SD * math.sqrt(2))))
+
+
+def team_ratings(games):
+    """每隊到目前為止的平均：淨勝分、得分、失分；場數少的往聯盟平均拉"""
+    reg = games[games["season_type"] == "Regular Season"]
+    if reg.empty:
+        return {}, 112.0
+    lg = float(reg["pts"].mean())
+    out = {}
+    for abbr, g in reg.groupby("abbreviation"):
+        n = len(g)
+        w = n / (n + SHRINK)
+        out[abbr] = {"n": n, "pm": w * g["plus_minus"].mean(),
+                     "off": w * g["pts"].mean() + (1 - w) * lg,
+                     "def": w * g["opp_pts"].mean() + (1 - w) * lg,
+                     "last": g["game_date"].max()}
+    return out, lg
+
+
+def predict_game(home, away, game_day, ratings, lg, missing=None):
+    """一場比賽的預測：回傳主隊勝率、預測比分、影響因素（每個因素都寫出加減幾分）"""
+    missing = missing or {}
+    h, a = ratings.get(home), ratings.get(away)
+    if not h or not a:
+        return None
+    margin = h["pm"] - a["pm"] + HOME_EDGE
+    factors = [f"實力：{home} 場均淨勝 {h['pm']:+.1f}、{away} {a['pm']:+.1f}", f"{home} 主場 +{HOME_EDGE}"]
+    for abbr, r, sign in [(home, h, -1), (away, a, 1)]:
+        if (game_day - r["last"]).days == 1:
+            margin += sign * B2B_PENALTY
+            factors.append(f"{abbr} 背靠背 −{B2B_PENALTY}")
+        if abbr in missing:
+            margin += sign * STAR_PENALTY
+            factors.append(f"{abbr} {missing[abbr]} 上一場缺陣 −{STAR_PENALTY:g}")
+    home_pts = (h["off"] + a["def"]) / 2
+    away_pts = (a["off"] + h["def"]) / 2
+    mid = (home_pts + away_pts) / 2
+    return {"p_home": win_prob(margin), "margin": margin,
+            "home_pts": mid + margin / 2, "away_pts": mid - margin / 2, "factors": factors}
+
+
+@st.cache_data(ttl=900, show_spinner="計算預測準確率中…")
+def backtest(tg):
+    """回頭驗證：本季每場已打完的比賽，只用「比賽前」的資料預測，看猜對幾場"""
+    reg = tg[tg["season_type"] == "Regular Season"]
+    right = total = 0
+    for day in sorted(reg["game_date"].unique()):
+        day = pd.Timestamp(day)
+        ratings, lg = team_ratings(reg[reg["game_date"] < day])
+        for _, g in reg[reg["game_date"] == day].groupby("game_id"):
+            if len(g) != 2 or not g["is_home"].astype(bool).any():
+                continue
+            hm = g[g["is_home"].astype(bool)].iloc[0]
+            aw = g[~g["is_home"].astype(bool)].iloc[0]
+            if ratings.get(hm["abbreviation"], {}).get("n", 0) < 3 or ratings.get(aw["abbreviation"], {}).get("n", 0) < 3:
+                continue
+            p = predict_game(hm["abbreviation"], aw["abbreviation"], day, ratings, lg)
+            if p:
+                total += 1
+                right += int((p["p_home"] >= 0.5) == (hm["wl"] == "W"))
+    return right, total
+
+
+def project_players(team, opp, pl, sa, ratings, lg, n=3):
+    """球員下一場預估：近 10 場佔 6 成、本季平均佔 4 成；得分再依對手防守（平常失幾分）微調"""
+    if pl.empty or sa.empty:
+        return []
+    season = sa[(sa["abbreviation"] == team) & (sa["gp"] >= 2)]
+    opp_r = ratings.get(opp)
+    factor = 1.0
+    if opp_r:
+        factor = max(0.92, min(1.08, opp_r["def"] / lg))
+    team_games = pl[pl["abbreviation"] == team]["game_id"].unique()
+    last_game = pl[pl["abbreviation"] == team].sort_values("game_date")["game_id"].iloc[-1] if len(team_games) else None
+    out = []
+    for r in season.itertuples():
+        rec = pl[(pl["player_id"] == r.player_id) & (pl["abbreviation"] == team)].sort_values("game_date").tail(10)
+        if rec.empty:
+            continue
+        gp = r.gp
+        proj = {}
+        for k in ["pts", "reb", "ast"]:
+            proj[k] = 0.6 * rec[k].mean() + 0.4 * getattr(r, k) / gp
+        proj["pts"] *= factor
+        sd = rec["pts"].std()
+        spread = max(3.0, float(sd)) if len(rec) >= 3 and pd.notna(sd) else 6.0
+        out.append({"name": r.player_name, "pts": proj["pts"], "reb": proj["reb"], "ast": proj["ast"],
+                    "lo": max(0, proj["pts"] - spread), "hi": proj["pts"] + spread,
+                    "out": last_game is not None and not ((pl["game_id"] == last_game) & (pl["player_id"] == r.player_id)).any()})
+    return sorted(out, key=lambda x: -x["pts"])[:n]
+
+
+def missing_stars(pl, sa):
+    """每隊本季上場時間最多的球員，如果上一場沒有上場，記下來（預測時扣分）"""
+    out = {}
+    if pl.empty or sa.empty:
+        return out
+    for abbr, g in pl.groupby("abbreviation"):
+        s_ = sa[(sa["abbreviation"] == abbr) & (sa["gp"] >= 2)].copy()
+        if s_.empty:
+            continue
+        s_["mpg"] = s_["min"] / s_["gp"]
+        star = s_.sort_values("mpg").iloc[-1]
+        last = g.sort_values("game_date")["game_id"].iloc[-1]
+        if not ((g["game_id"] == last) & (g["player_id"] == star.player_id)).any():
+            out[abbr] = star.player_name
+    return out
+
+
+def render_predictions(tg, season):
+    last_done = tg["game_date"].max()
+    sched = load_schedule_after(season, last_done.strftime("%Y-%m-%d"))
+    section("下一個比賽日：預測", "勝率與預估比分只用本季打過的比賽計算；球員是預估的合理範圍，不是保證")
+    if sched.empty:
+        st.info("還沒有賽程資料。請先在 Supabase 執行 schema_schedule.sql，再在電腦上執行：python load_recap.py")
+        return
+    day = sched["game_date"].min()
+    games = sched[sched["game_date"] == day]
+    since = (last_done - pd.Timedelta(days=21)).strftime("%Y-%m-%d")
+    pl_ = load_recap_players(season, since)
+    sa_ = load_recap_season(season)
+    ratings, lg = team_ratings(tg)
+    missing = missing_stars(pl_, sa_)
+    right, total = backtest(tg)
+    acc = f"本季已回頭驗證 {total} 場：猜對 {right} 場（{right / total:.0%}）。" if total else "開季場數還太少，尚未驗證準確率。"
+    insight([f"<b>{day:%m/%d}</b>（美國時間）共 <b>{len(games)}</b> 場比賽。{acc}"
+             "NBA 預測模型一般的猜對率大約 6～7 成，比賽本來就有很大的運氣成分。"])
+
+    cards = []
+    for g in games.itertuples():
+        p = predict_game(g.home_abbr, g.away_abbr, day, ratings, lg, missing)
+        if p is None:
+            cards.append(f'<div class="rc-card"><div class="rc-row"><div class="rc-team">{badge(g.away_abbr)}</div>'
+                         f'<div class="rc-final">本季還沒打過<br>無法預測</div><div class="rc-team">{badge(g.home_abbr)}</div></div></div>')
+            continue
+        ph = p["p_home"]
+        ca, chh = TEAM_COLORS.get(g.away_abbr, "#6f6883"), TEAM_COLORS.get(g.home_abbr, "#6f6883")
+        fav = g.home_abbr if ph >= 0.5 else g.away_abbr
+        players = ""
+        for abbr, opp in [(g.away_abbr, g.home_abbr), (g.home_abbr, g.away_abbr)]:
+            for r in project_players(abbr, opp, pl_, sa_, ratings, lg, n=2):
+                warn = '<span style="color:#f59e0b">（上一場未出賽）</span>' if r["out"] else ""
+                players += (f'<div class="rc-pp"><span class="ab" style="background:{TEAM_COLORS.get(abbr, "#4b4560")}">{abbr}</span>'
+                            f'<span class="nm">{r["name"]}</span>{warn}<span class="v"><b>{r["pts"]:.0f}</b> 分'
+                            f'<small>（{r["lo"]:.0f}–{r["hi"]:.0f}）</small>　{r["reb"]:.0f} 板　{r["ast"]:.0f} 助</span></div>')
+        status = g.status if isinstance(g.status, str) and g.status and "Final" not in g.status else ""
+        cards.append(f'''<div class="rc-card"><div class="rc-row">
+  <div class="rc-team">{badge(g.away_abbr)}<div class="rc-rec">{record_through(tg, g.away_abbr, last_done)}</div></div>
+  <div class="rc-score {'rc-win' if ph < 0.5 else 'rc-lose'}">{p["away_pts"]:.0f}</div>
+  <div class="rc-final">預測<small>{status}</small></div>
+  <div class="rc-score {'rc-win' if ph >= 0.5 else 'rc-lose'}">{p["home_pts"]:.0f}</div>
+  <div class="rc-team">{badge(g.home_abbr)}<div class="rc-rec">{record_through(tg, g.home_abbr, last_done)}</div></div>
+</div>
+<div class="rc-prob"><span style="width:{(1 - ph) * 100:.0f}%;background:{ca}"></span><span style="width:{ph * 100:.0f}%;background:{chh}"></span></div>
+<div class="rc-probtxt"><span>{g.away_abbr} {1 - ph:.0%}</span><span>{fav} 較有機會</span><span>{g.home_abbr} {ph:.0%}</span></div>
+<div class="rc-why">{"・".join(p["factors"])}</div>{players}</div>''')
+    cols = st.columns(3, gap="medium")
+    for i, c in enumerate(cards):
+        cols[i % 3].markdown(c, unsafe_allow_html=True)
+
+    with st.expander("預測怎麼算的"):
+        st.markdown(f"""
+**比賽勝率**
+1. 每隊的實力＝本季**場均淨勝分**。開季場數少不穩定，所以打了 n 場只相信 n／(n+{SHRINK})，其餘當作聯盟平均（0 分）。
+2. 預測分差＝主隊實力 − 客隊實力 ＋ 主場優勢 {HOME_EDGE} 分；前一天才打過（背靠背）的球隊 −{B2B_PENALTY} 分；上場時間最多的主力上一場沒上場 −{STAR_PENALTY:g} 分（不知道他下一場會不會回來，只是提醒）。
+3. 分差換成勝率：真實比賽和預測大約會差 ±{GAME_SD:g} 分，所以預測贏 5 分的球隊，勝率大約 66%，不是 100%。
+4. 預估比分＝（自己平常得分＋對手平常失分）÷ 2，再依預測分差左右分開。
+5. **回頭驗證**：本季每一場打完的比賽，都只用「那一天以前」的資料重算一次，看猜對幾場；兩隊都至少打過 3 場才算。
+
+**球員表現**
+- 預估＝最近 10 場平均 × 0.6 ＋ 本季平均 × 0.4（最近狀況比較重要，但不能只看最近）。
+- 得分再看對手防守：對手平常失分比聯盟平均高，就往上調，最多 ±8%。
+- 括號裡是合理範圍：用他最近幾場得分的起伏（標準差）估計，大約 7 成的比賽會落在這個範圍內。
+
+**沒有考慮的**：傷兵名單、先發陣容、交易、旅行距離、球員之間的對位。這些資料庫目前沒有。
+""")
+
+
 if PAGE == "每日戰報":
     st.markdown("""
 <style>
@@ -1264,6 +1463,16 @@ if PAGE == "每日戰報":
           border: 1px solid #ddd0fb; border-radius: 999px; padding: 2px 9px; margin: 0 6px 6px 0; }
 .rc-c { background: var(--surface); border: 1px solid var(--line); border-left: 4px solid #c8102e;
         border-radius: 12px; padding: 12px 16px; margin-bottom: 10px; }
+.rc-prob { display: flex; height: 6px; border-radius: 3px; overflow: hidden; margin: 12px 0 4px 0; gap: 2px; }
+.rc-probtxt { display: flex; justify-content: space-between; color: #b9b1cf; font-size: 0.76rem; font-variant-numeric: tabular-nums; }
+.rc-probtxt span:nth-child(2) { color: #a78bfa; font-weight: 700; }
+.rc-why { color: #8d86a3; font-size: 0.74rem; margin: 6px 0 2px 0; line-height: 1.5; }
+.rc-pp { display: flex; align-items: baseline; gap: 6px; color: #d9d0f5; font-size: 0.8rem; padding: 4px 0;
+         border-top: 1px solid #241b38; flex-wrap: wrap; }
+.rc-pp:first-of-type { margin-top: 6px; }
+.rc-pp .ab { color: #fff; font-size: 0.64rem; font-weight: 900; border-radius: 4px; padding: 1px 5px; }
+.rc-pp .nm { color: #ffffff; font-weight: 700; }
+.rc-pp .v { margin-left: auto; } .rc-pp .v b { color: #ffffff; font-size: 0.95rem; } .rc-pp small { color: #8d86a3; }
 .rc-c .top { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
 .rc-c .nm { font-weight: 900; color: var(--ink); }
 .rc-c .rec { color: var(--muted); font-size: 0.8rem; }
@@ -1276,6 +1485,9 @@ if PAGE == "每日戰報":
         st.info("尚未載入資料。請先在 Supabase 執行 schema_recap.sql，再在電腦上執行：python load_recap.py")
     else:
         season = tg["season"].iloc[0]
+        render_predictions(tg, season)
+        st.divider()
+        section("比賽結果", "選一個比賽日，看比分、值得關注的球員、球隊隱憂與戰績榜")
         dates = sorted(tg["game_date"].unique(), reverse=True)
         labels = {d: pd.Timestamp(d).strftime("%m/%d") for d in dates[:10]}
         pick = pills("比賽日（美國時間）", list(labels), "rc_day", default=dates[0],
