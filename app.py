@@ -10,6 +10,7 @@ NBA 冠軍球隊數據分析網頁（Streamlit）
 
 import io
 import os
+import re
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -239,6 +240,35 @@ hr { border-color: var(--line) !important; }
 .card-q { color: var(--brand); font-size: 0.93rem; margin-top: 2px; font-weight: 500; }
 .card-desc { color: var(--ink-2); font-size: 0.84rem; line-height: 1.6; margin-top: 8px; }
 .footnote { color: var(--muted); font-size: 0.78rem; text-align: center; margin-top: 36px; }
+/* ===== 維基式版面（1030-1～4、1030-7、1030-11）===== */
+.summary { background: var(--brand-soft); border: 1px solid #ddd0fb; border-radius: 12px; padding: 12px 18px;
+           margin: 0 0 14px 0; color: #2d2245; font-size: 0.93rem; line-height: 1.85; }
+.summary-k { font-size: 0.74rem; font-weight: 700; color: #4c1d95; letter-spacing: 0.08em; margin-bottom: 2px; }
+.summary ol { margin: 0; padding-left: 1.3rem; }
+.chart-headline { font-size: 1.02rem; font-weight: 700; color: var(--ink); margin: 6px 0 4px 0; line-height: 1.5; }
+.howread { font-size: 0.86rem; color: var(--ink-2); line-height: 1.8; }
+.check-k { display: inline-block; font-size: 0.74rem; font-weight: 700; color: #4c1d95; background: #ffffff;
+           border: 1px solid #c4b5fd; border-radius: 4px; padding: 0 7px; margin-right: 10px; line-height: 1.7; }
+.section-title.sub2 { font-size: 1rem; border-left-width: 2px; margin-left: 14px; }
+.section-title.sub2 + .section-sub { margin-left: 27px; }
+.toc { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 10px 18px;
+       margin: 0 0 14px 0; font-size: 0.9rem; line-height: 1.9; }
+.toc-k { font-size: 0.74rem; font-weight: 700; color: var(--ink-2); letter-spacing: 0.08em; }
+.toc a { color: var(--ink); text-decoration: none; } .toc a:hover { color: var(--brand); text-decoration: underline; }
+.toc .t2 { padding-left: 1.4rem; color: var(--ink-2); }
+.foot-k { font-size: 0.95rem; font-weight: 700; color: var(--ink); margin: 26px 0 6px 0; padding-left: 10px;
+          border-left: 3px solid var(--brand); }
+.foot-why { font-size: 0.8rem; color: var(--ink-2); margin: -2px 0 10px 4px; line-height: 1.5; }
+.feature { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; height: 100%; }
+.feature-top { background: var(--night); padding: 10px 18px; font-size: 0.78rem; color: #a78bfa; font-weight: 700;
+               letter-spacing: 0.1em; }
+.feature-body { padding: 16px 20px 18px 20px; }
+.feature-title { font-size: 1.45rem; font-weight: 900; color: var(--ink); line-height: 1.4; }
+.feature-text { font-size: 0.92rem; color: var(--ink-2); line-height: 1.8; margin-top: 8px; }
+.feature-page { font-size: 0.8rem; color: var(--brand); margin-top: 10px; font-weight: 500; }
+.headline-item { border-bottom: 1px solid var(--line); padding: 8px 2px 4px 2px; }
+.headline-item .hp { font-size: 0.74rem; color: var(--brand); font-weight: 700; }
+.headline-item .ht { font-size: 0.92rem; color: var(--ink); line-height: 1.55; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -255,11 +285,72 @@ def hypothesis(question, guess):
                 f'<div><span class="hypo-k">假設</span>{guess}</div></div>', unsafe_allow_html=True)
 
 
-def section(title, sub=""):
-    """區塊標題＋一行說明；回傳一個緊接在標題下方的空位，之後可以把「結論」放進去（先讀結論再看圖）"""
-    st.markdown(f'<div class="section-title">{title}</div>'
-                f'<div class="section-sub">{sub}</div>', unsafe_allow_html=True)
+def hypo_only(guess):
+    """題目下方的「假設」小卡（冠軍密碼每一題用；1030-12）"""
+    st.markdown(f'<div class="hypo"><div><span class="hypo-k" style="background:var(--brand)">假設</span>{guess}</div></div>',
+                unsafe_allow_html=True)
+
+
+def section(title, sub="", anchor=None, level=1):
+    """區塊標題＋一行說明；回傳一個緊接在標題下方的空位，之後可以把「發現／結論」放進去（先讀結論再看圖）
+    說明超過 40 字時，只留第一句當副標，完整說明收進可點開的「怎麼讀這張圖」（1030-3）
+    anchor：給本頁目錄跳轉用的錨點；level=2 是小一級的標題（例如 3-1、3-2）"""
+    short, full = sub, ""
+    if len(_plain(sub)) > 40:
+        parts = re.split(r"(?<=[。；])|　", sub, maxsplit=1)
+        short, full = parts[0].strip().rstrip("；。"), sub
+    aid = f' id="{anchor}"' if anchor else ""
+    cls = "section-title" + (" sub2" if level == 2 else "")
+    st.markdown(f'<div class="{cls}"{aid}>{title}</div>'
+                f'<div class="section-sub">{short}</div>', unsafe_allow_html=True)
+    if full:
+        how_read(full)
     return st.container()
+
+
+def _plain(s):
+    """拿掉 <b> 這類 HTML 標籤，只留文字"""
+    return re.sub(r"<[^>]+>", "", str(s or "")).strip()
+
+
+def how_read(text, where=None):
+    """長的讀法收進可點開的說明（1030-3），畫面不會被一大段字塞滿"""
+    with (where or st).expander("怎麼讀這張圖"):
+        st.markdown(f'<div class="howread">{text}</div>', unsafe_allow_html=True)
+
+
+# ---------- 「發現／結論」框＋頁首摘要（1030-1、1030-3、1030-12）----------
+PAGE_FINDINGS = []      # 這一頁所有「發現」的第一句，整頁畫完後放進頁首的摘要
+NOTE_WORDS = ("尚未", "還沒", "沒有資料", "請先", "請把", "資料不足", "無法計算", "算不出來")
+
+
+def insight(lines=None, where=None, label="結論", to_summary=True, headline=True, check=None):
+    """「發現／結論」框。
+    - 第一句自動放大成圖上方的標題（圖的標題直接寫發現）；其餘句子留在框裡
+    - 「讀法：…」開頭的句子收進可點開的「怎麼讀這張圖」
+    - check：對照假設，說明假設成立與否（冠軍密碼等頁使用）
+    - 第一句同時收進頁首「摘要」；「資料還沒載入」這類提示不會被當成標題或摘要"""
+    lines = [x for x in (lines or []) if x]
+    if not lines and not check:
+        return
+    host = where or st
+    reads = [x for x in lines if _plain(x).startswith("讀法：")]
+    lines = [x for x in lines if x not in reads]
+    first = _plain(re.sub(r"</b>：", "</b>，", lines[0])) if lines else ""
+    is_note = (not first) or any(w in first[:16] for w in NOTE_WORDS)
+    body = lines
+    if headline and not is_note:
+        host.markdown(f'<div class="chart-headline">{first}</div>', unsafe_allow_html=True)
+        body = lines[1:]
+    if check:
+        body = body + [f'<span class="check-k">對照假設</span>{check}']
+    if body:
+        host.markdown(f'<div class="insight"><span class="insight-k">{label}</span>'
+                      + "<br>".join(body) + "</div>", unsafe_allow_html=True)
+    if reads:
+        how_read("<br>".join(_plain(x)[3:] for x in reads), where=host)
+    if to_summary and not is_note:
+        PAGE_FINDINGS.append(first)
 
 
 def style(fig, height):
@@ -550,6 +641,111 @@ def add_metrics(d, games_col="games"):
     return d
 
 
+# ---------- 跑動距離、全部球隊逐場輸贏（跑動距離、賽程與休息、主場與客場、首頁共用）----------
+KM = 1.609   # 1 英里 = 1.609 公里
+
+
+@st.cache_data(ttl=3600, show_spinner="讀取跑動數據中…")
+def load_tracking(entity):
+    """tracking_speed：entity = 'team'（30 隊）或 'player'（所有球員），每場平均跑動距離與速度"""
+    try:
+        return fetch_all_filtered("tracking_speed", [("eq", "entity", entity)], ["season", "season_type", "id"])
+    except Exception:
+        return pd.DataFrame()
+
+
+def fetch_all_filtered(table, filters, order_cols, page=1000):
+    """和 fetch_all 一樣一頁一頁讀，但先在資料庫篩選（例如只要球隊、不要球員）"""
+    rows, start = [], 0
+    while True:
+        q = get_client().table(table).select("*")
+        for op, col, val in filters:
+            q = getattr(q, op)(col, val)
+        for c in order_cols:
+            q = q.order(c)
+        part = q.range(start, start + page - 1).execute().data
+        rows += part
+        if len(part) < page:
+            break
+        start += page
+    return pd.DataFrame(rows)
+
+
+def prep_tracking(tr, league_tbl):
+    """整理跑動數據：英里換公里、配上勝率、同季排名與「比同季聯盟多多少」"""
+    if tr.empty:
+        return tr
+    d = tr.copy()
+    for c in ["gp", "min", "dist_miles", "dist_miles_off", "dist_miles_def", "avg_speed", "avg_speed_off", "avg_speed_def"]:
+        d[c] = pd.to_numeric(d[c], errors="coerce")
+    d["id"] = pd.to_numeric(d["id"], errors="coerce")
+    d["dist_km"] = d["dist_miles"] * KM
+    for c in ["avg_speed", "avg_speed_off", "avg_speed_def"]:
+        d[c.replace("avg_speed", "spd")] = d[c] * KM
+    if not league_tbl.empty:
+        lg = league_tbl[["season", "season_type", "team_id", "gp", "w", "abbreviation"]].copy()
+        lg["team_id"] = pd.to_numeric(lg["team_id"], errors="coerce")
+        lg["win_pct"] = pd.to_numeric(lg["w"], errors="coerce") / pd.to_numeric(lg["gp"], errors="coerce").replace(0, pd.NA)
+        d = d.merge(lg[["season", "season_type", "team_id", "win_pct", "abbreviation"]].rename(columns={"team_id": "id"}),
+                    on=["season", "season_type", "id"], how="left")
+    else:
+        d["win_pct"], d["abbreviation"] = float("nan"), None
+    d["win_pct"] = pd.to_numeric(d["win_pct"], errors="coerce")
+    keys = ["season", "season_type"]
+    for col, _ in TRACK_OPTS.values():
+        d[f"rk_{col}"] = d.groupby(keys)[col].rank(ascending=False, method="min")
+        d[f"d_{col}"] = d[col] - d.groupby(keys)[col].transform("mean")
+    d["rk_win"] = d.groupby(keys)["win_pct"].rank(ascending=False, method="min")
+    d["champion"] = [(s_, a_) in CHAMP_SET for s_, a_ in zip(d["season"], d["abbreviation"])]
+    return d
+
+
+RECENT = "2018-19"   # 2019 年起連續 8 年不同冠軍（首頁與冠軍密碼共用）
+
+# 跑動指標：顯示名稱 →（欄位, 單位）
+TRACK_OPTS = {"每場跑動距離": ("dist_km", "公里"), "平均速度": ("spd", "公里／小時"),
+              "進攻時速度": ("spd_off", "公里／小時"), "防守時速度": ("spd_def", "公里／小時")}
+
+
+@st.cache_data(ttl=3600, show_spinner="讀取各隊逐場輸贏中…（球隊越多越久，約 10～30 秒）")
+def load_team_games_all(team_ids):
+    """已載入球隊的每一場比賽：日期、球季、比賽類型、主客場、輸贏。一隊一隊讀，每隊約 2,000 場"""
+    out = []
+    for tid in team_ids:
+        start, page = 0, 1000
+        try:
+            while True:
+                part = (get_client().table("team_games")
+                        .select("game_id,team_id,is_home,wl,matchup,games!inner(game_date,season,season_type)")
+                        .eq("team_id", int(tid)).order("game_id")
+                        .range(start, start + page - 1).execute().data)
+                out += part
+                if len(part) < page:
+                    break
+                start += page
+        except Exception:
+            continue
+    if not out:
+        return pd.DataFrame()
+    df = pd.json_normalize(out).rename(columns=lambda c: c.replace("games.", ""))
+    df["game_date"] = pd.to_datetime(df["game_date"], errors="coerce")
+    df["team_id"] = pd.to_numeric(df["team_id"], errors="coerce")
+    return df
+
+
+def team_games_with_abbr():
+    """load_team_games_all 加上球隊代號、是否奪冠球季、輸贏 1/0"""
+    ids = team_raw[["team_id", "abbreviation"]].drop_duplicates()
+    ids["team_id"] = pd.to_numeric(ids["team_id"], errors="coerce")
+    d = load_team_games_all(tuple(sorted(ids["team_id"].dropna().astype(int))))
+    if d.empty:
+        return d
+    d = d.merge(ids, on="team_id", how="left")
+    d["win"] = (d["wl"] == "W").astype(int)
+    d["champion"] = [(s_, a_) in CHAMP_SET for s_, a_ in zip(d["season"], d["abbreviation"])]
+    return d
+
+
 team_raw, player_raw, champs, league = load_data()
 if team_raw.empty:
     st.error("資料庫裡還沒有資料，請先執行 load_to_supabase.py")
@@ -581,8 +777,14 @@ PAGES = [
      "戰術地圖、八位冠軍的共同點、全聯盟各隊比較與奪冠方程式。", set()),
     ("冠軍故事", "上場陣容", "冠軍的核心五人是誰？",
      "哪一組 5 人同時在場最久、淨效率多高；每位冠軍都靠一組固定核心嗎？", set()),
+    ("冠軍故事", "跑動距離", "冠軍跑得比較多嗎？",
+     "各隊每場跑幾公里、跑多快；冠軍在聯盟排第幾，跑得多和贏球有沒有關係，隊上誰跑最多。", set()),
     ("冠軍故事", "籤運與傷兵", "冠軍是不是靠運氣？",
      "冠軍的季後賽對手比一般季後賽球隊弱嗎？遇到的是不是剛好都打得贏？對手主力缺陣有沒有特別多？", set()),
+    ("冠軍故事", "賽程與休息", "背靠背會不會輸比較多？",
+     "休息 0、1、2、3 天以上的勝率；每位冠軍背靠背 vs 有休息；聯盟背靠背是不是越來越少。", set()),
+    ("冠軍故事", "主場與客場", "冠軍的主場優勢比較大嗎？",
+     "主場勝率 − 客場勝率：冠軍 vs 其他球隊、主場優勢是不是一年比一年小、冠軍在季後賽客場的戰績。", set()),
     ("自由探索", "球季趨勢", "各隊一路怎麼變化？",
      "選一個指標，看各隊 20 季的折線；可聚焦幾支球隊，其他變灰。", {"team", "season", "type", "metric"}),
     ("自由探索", "球隊 × 球季", "哪隊在哪季特別突出？",
@@ -654,6 +856,7 @@ else:
     grp, name, question, *_ = PAGE_INFO[PAGE]
     st.markdown(f'<div class="pagehead"><div class="crumb">{grp}　／　{name}</div>'
                 f'<h2>{name}</h2><div class="pq">{question}</div></div>', unsafe_allow_html=True)
+SUMMARY_SLOT = st.container() if PAGE != HOME else None   # 頁首摘要的空位（1030-1），整頁畫完才填
 
 
 def split_teams(available, s_from, s_to):
@@ -769,7 +972,72 @@ if team_season.empty:
 # =====================================================================
 # 首頁：像 YouTube 首頁一樣的卡片牆，一張卡＝一個研究問題
 # =====================================================================
+def home_findings():
+    """首頁的「重點發現」：每一句都由資料即時算出來（1030-7）。回傳 [(頁面, 標題, 補充說明)]"""
+    out = []
+    if league.empty:
+        return out
+    lg = league[league["season_type"] == "Regular Season"].copy()
+    for c in ["gp", "w", "fga", "fg3a", "net_rating"]:
+        lg[c] = pd.to_numeric(lg[c], errors="coerce")
+    lg = lg[lg["season"].isin(set(champs["season"]))]
+    if lg.empty:
+        return out
+    lg["rk_net"] = lg.groupby("season")["net_rating"].rank(ascending=False, method="min")
+    ch = lg.merge(champs[["season", "team_id"]], on=["season", "team_id"])
+    if len(ch):
+        med = ch["rk_net"].median()
+        top5 = (ch["rk_net"] <= 5).mean()
+        out.append(("冠軍密碼", f"冠軍的淨效率排名中位數是聯盟第 {med:.0f} 名",
+                    f"{len(ch)} 位冠軍中，{top5:.0%} 的例行賽淨效率排在聯盟前 5。奪冠最一致的條件是整體實力，不是單一項目。"))
+        rec = ch[ch["season"] >= RECENT]
+        if len(rec):
+            k = int((rec["rk_net"] == 1).sum())
+            out.append(("籤運與傷兵", f"2019 年後 {len(rec)} 位冠軍，只有 {k} 位是例行賽淨效率第 1",
+                        "最強的隊不一定奪冠。那其他冠軍是不是籤運好、遇到對手傷兵？"))
+    g = lg.groupby("season")
+    tp = (g["fg3a"].sum() / g["fga"].sum()).dropna()
+    if len(tp) > 1:
+        out.append(("投籃分布", f"聯盟三分出手比例從 {tp.iloc[0]:.0%} 變成 {tp.iloc[-1]:.0%}",
+                    f"{tp.index[0]} 到 {tp.index[-1]}，每 10 次出手裡的三分球多了 {(tp.iloc[-1] - tp.iloc[0]) * 10:.1f} 次。冠軍是怎麼調整出手位置的？"))
+    try:
+        tr = prep_tracking(load_tracking("team"), league)
+    except Exception:
+        tr = pd.DataFrame()
+    if not tr.empty and "champion" in tr:
+        c_ = tr[(tr["season_type"] == "Regular Season") & tr["champion"]]
+        if len(c_):
+            out.append(("跑動距離", f"冠軍的跑動距離排名中位數是第 {c_['rk_dist_km'].median():.0f} 名",
+                        f"{len(c_)} 位冠軍（2016-17 起）每場平均跑 {c_['dist_km'].mean():.1f} 公里。跑得多不一定贏得多。"))
+    return out
+
+
 if PAGE == HOME:
+    # ===== 本週發現（左邊大的）＋重點發現清單（右邊）：1030-7 =====
+    finds = home_findings()
+    if finds:
+        import datetime as _dt
+        pick = _dt.date.today().isocalendar()[1] % len(finds)      # 每週自動換一則
+        fp, ft, fx = finds[pick]
+        left, right = st.columns([3, 2], gap="large")
+        with left:
+            st.markdown(f'<div class="feature"><div class="feature-top">本週發現</div><div class="feature-body">'
+                        f'<div class="feature-title">{ft}</div><div class="feature-text">{fx}</div>'
+                        f'<div class="feature-page">出自：{PAGE_INFO[fp][0]} ／ {fp}</div></div></div>',
+                        unsafe_allow_html=True)
+            st.button(f"閱讀「{fp}」　→", key="feat_go", on_click=goto, args=(fp,), type="primary")
+        with right:
+            st.markdown('<div class="home-group" style="margin-top:0">重點發現</div>', unsafe_allow_html=True)
+            for i, (p_, t_, _) in enumerate(finds):
+                if i == pick:
+                    continue
+                st.markdown(f'<div class="headline-item"><div class="hp">{p_}</div><div class="ht">{t_}</div></div>',
+                            unsafe_allow_html=True)
+                try:
+                    st.button("前往　→", key=f"hl_{i}", on_click=goto, args=(p_,), type="tertiary")
+                except Exception:
+                    st.button("前往　→", key=f"hl_{i}", on_click=goto, args=(p_,))
+        st.write("")
     home = team_raw[team_raw["abbreviation"].isin(ALL_TEAMS) & (team_raw["season_type"] == "Regular Season")]
     n_titles = sum(1 for s_, a_ in CHAMP_SET if a_ in ALL_TEAMS and s_ in set(ALL_SEASONS))
     k1, k2, k3, k4 = st.columns(4)
@@ -829,7 +1097,6 @@ def glossary_table(names):
 STYLE = [("節奏", "pace", True), ("三分出手比例", "tpar", True), ("進攻效率", "off_rating", True),
          ("防守效率", "def_rating", False), ("進攻籃板率", "oreb_pct", True),
          ("助攻失誤比", "ast_to", True), ("失誤少", "tm_tov_pct", False)]
-RECENT = "2018-19"   # 2019 年起連續 8 年不同冠軍
 
 
 def show(v, kind):
@@ -838,12 +1105,6 @@ def show(v, kind):
     if kind == "pct":
         return f"{(v if v > 1 else v * 100):.1f}%"
     return {"signed": f"{v:+.1f}", "num1": f"{v:.1f}", "num2": f"{v:.2f}"}[kind]
-
-
-def insight(lines=None, where=None):
-    """「結論」框：where 是 section() 回傳的空位，結論就會出現在圖的上面"""
-    (where or st).markdown('<div class="insight"><span class="insight-k">結論</span>'
-                           + "<br>".join(lines or []) + "</div>", unsafe_allow_html=True)
 
 
 if PAGE == "冠軍密碼":
@@ -873,10 +1134,21 @@ if PAGE == "冠軍密碼":
         else:
             st.caption(f"以下三題都用全聯盟 30 隊的例行賽數據（{q_seasons[0]}～{q_seasons[-1]}，"
                        f"共 {len(CH)} 位冠軍）；這一頁只受上方「球季範圍」影響。")
+            # 本頁目錄（1030-11：只做在這一頁）
+            st.markdown('<div class="toc"><div class="toc-k">本頁目錄</div>'
+                        '<div><a href="#q1">Q1　奪冠的最佳因素是什麼？</a></div>'
+                        '<div><a href="#q2">Q2　三分球時代是否造就了近年的冠軍？</a></div>'
+                        '<div><a href="#q3">Q3　為什麼這幾年冠軍球隊都不一樣？</a></div>'
+                        '<div class="t2"><a href="#q3-1">3-1　實力差距變小了嗎？</a></div>'
+                        '<div class="t2"><a href="#q3-2">3-2　每支冠軍的打法都不同嗎？</a></div></div>',
+                        unsafe_allow_html=True)
 
             # ===== Q1 =====
+            st.markdown('<div id="q1"></div>', unsafe_allow_html=True)
             q1_slot = section("Q1　奪冠的最佳因素是什麼？",
-                    "每個點是一位冠軍在該項指標的聯盟排名（1 = 最好）；◆ 是中位數；越集中在左邊，越是冠軍的共同點")
+                    "每個點是一位冠軍在該項指標的聯盟排名（1 = 最好）；◆ 是中位數；越集中在左邊，越是冠軍的共同點", anchor="q1h")
+            with q1_slot:
+                hypo_only("冠軍最一致的特徵是「淨效率」（整體實力），而不是三分、籃板這類單一項目。")
             summ = []
             for label, col, hb, kind in FACTORS:
                 r = CH[f"rk_{col}"].dropna()
@@ -924,7 +1196,10 @@ if PAGE == "冠軍密碼":
                            "用每 100 回合來比，才不會因為某隊節奏快、出手次數多而看起來比較強。")
                 glossary_table(list(summ["label"]))
             best, worst = summ.iloc[0], summ.iloc[-1]
-            insight(where=q1_slot, lines=[
+            insight(where=q1_slot, label="發現", check=(
+                f"成立：最一致的就是淨效率。" if best["label"] == "淨效率" else
+                f"不完全成立：最一致的是{best['label']}，淨效率排第 "
+                f"{int(summ.index[summ['label'] == '淨效率'][0]) + 1 if (summ['label'] == '淨效率').any() else '-'} 名。"), lines=[
                 f"<b>最一致的因素：{best['label']}</b>：{int(best['n'])} 位冠軍的排名中位數是第 {best['median']:.0f} 名，"
                 f"{best['top5']:.0%} 排在聯盟前 5。",
                 f"<b>第二、三名：</b>{summ.iloc[1]['label']}（中位數第 {summ.iloc[1]['median']:.0f} 名）、"
@@ -934,17 +1209,27 @@ if PAGE == "冠軍密碼":
             st.divider()
 
             # ===== Q2 =====
+            st.markdown('<div id="q2"></div>', unsafe_allow_html=True)
             q2_slot = section("Q2　三分球時代是否造就了近年的冠軍？",
                     "灰線是聯盟平均，淡紫色帶是 30 隊的最低到最高，★ 是當季冠軍；要看的是冠軍「相對於同季聯盟」的位置")
+            with q2_slot:
+                hypo_only("2019 年後的冠軍，三分出手比例都高於同季聯盟平均（三分投得多的隊伍比較會奪冠）。")
             q2_opts = {"三分出手比例": ("tpar", "pct"), "三分命中率": ("fg3_pct", "pct"),
                        "場均三分出手": ("fg3a_pg", "num1")}
-            q2_name = seg("指標", list(q2_opts), "q2")
+            qa, qb = st.columns([3, 2])
+            with qa:
+                q2_name = seg("指標", list(q2_opts), "q2")
+            with qb:
+                q2_view = seg("怎麼看", ["看實際值", "看和聯盟的差"], "q2_view")
             q2_col, q2_kind = q2_opts[q2_name]
             g = LG.groupby("season")
             avg = {"tpar": g["fg3a"].sum() / g["fga"].sum(), "fg3_pct": g["fg3m"].sum() / g["fg3a"].sum(),
                    "fg3a_pg": g["fg3a"].sum() / g["gp"].sum()}[q2_col]
             lo, hi = g[q2_col].min(), g[q2_col].max()
             ch2 = CH.set_index("season")
+            diff = (ch2[q2_col] - avg.reindex(ch2.index))
+            scale = 100 if q2_kind == "pct" else 1
+            unit = "百分點" if q2_kind == "pct" else "次"
             fig = go.Figure()
             fig.add_trace(go.Scatter(x=hi.index, y=hi.values, mode="lines", line=dict(width=0),
                                      showlegend=False, hoverinfo="skip"))
@@ -962,11 +1247,8 @@ if PAGE == "冠軍密碼":
             fig.update_xaxes(categoryorder="array", categoryarray=q_seasons, type="category")
             fig.update_yaxes(title=q2_name, tickformat=".0%" if q2_kind == "pct" else None)
             fig.update_layout(hovermode="x unified")
-            st.plotly_chart(style(fig, 420), width="stretch")
-
-            diff = (ch2[q2_col] - avg.reindex(ch2.index))
-            scale = 100 if q2_kind == "pct" else 1
-            unit = "百分點" if q2_kind == "pct" else "次"
+            if q2_view == "看實際值":
+                st.plotly_chart(style(fig, 420), width="stretch")
             fig = go.Figure(go.Bar(
                 x=diff.index, y=diff.values * scale,
                 marker=dict(color=[ACCENT if v >= 0 else MUTED for v in diff.values]),
@@ -976,11 +1258,19 @@ if PAGE == "冠軍密碼":
             fig.add_hline(y=0, line=dict(color=INK_2, width=1))
             fig.update_xaxes(categoryorder="array", categoryarray=q_seasons, type="category", showgrid=False)
             fig.update_yaxes(title=f"冠軍 − 聯盟平均（{unit}）")
-            section(f"冠軍比聯盟平均多或少（{q2_name}）", "紫色＝高於聯盟平均，灰色＝低於聯盟平均")
-            st.plotly_chart(style(fig, 260), width="stretch")
+            if q2_view == "看和聯盟的差":
+                st.caption("紫色＝冠軍高於當季聯盟平均，灰色＝低於聯盟平均")
+                st.plotly_chart(style(fig, 320), width="stretch")
             above = int((diff > 0).sum())
             recent = diff[diff.index >= RECENT]
-            insight(where=q2_slot, lines=[
+            r_up = int((recent > 0).sum())
+            q2_check = None
+            if q2_col == "tpar" and len(recent):
+                q2_check = ("成立：2019 年後每一位冠軍都高於聯盟平均。" if r_up == len(recent) else
+                            f"不成立：2019 年後 {len(recent)} 位冠軍只有 {r_up} 位高於聯盟平均，三分投得多不是奪冠的必要條件。")
+            elif len(recent):
+                q2_check = "假設是講三分出手比例；切回「三分出手比例」就能看到對照結果。"
+            insight(where=q2_slot, label="發現", check=q2_check, lines=[
                 f"<b>聯盟趨勢：</b>{q2_name}從 {q_seasons[0]} 的 {show(avg.iloc[0], q2_kind)} "
                 f"變成 {q_seasons[-1]} 的 {show(avg.iloc[-1], q2_kind)}。",
                 f"<b>冠軍 vs 聯盟：</b>{len(diff)} 位冠軍中有 {above} 位高於當季聯盟平均"
@@ -989,8 +1279,13 @@ if PAGE == "冠軍密碼":
             st.divider()
 
             # ===== Q3 =====
-            q3_slot = section("Q3　為什麼這幾年冠軍球隊都不一樣？",
-                    "假設一：球隊實力差距變小。用 30 隊的標準差衡量：數值越小，代表強弱越接近")
+            st.markdown('<div id="q3"></div>', unsafe_allow_html=True)
+            section("Q3　為什麼這幾年冠軍球隊都不一樣？", "2019～2026 連續 8 年不同冠軍。下面用兩個可能的原因分別檢驗")
+            st.markdown('<div id="q3-1"></div>', unsafe_allow_html=True)
+            q3_slot = section("3-1　實力差距變小了嗎？",
+                    "用 30 隊的標準差衡量：數值越小，代表強弱越接近", level=2)
+            with q3_slot:
+                hypo_only("2019 年後，30 隊的實力差距（淨效率標準差）比之前小，所以誰都有機會奪冠。")
             q3_opts = {"淨效率": ("net_rating", ".1f"), "勝率": ("w_pct", ".1%")}
             q3_name = seg("用哪個指標衡量實力", list(q3_opts), "q3")
             q3_col, q3_fmt = q3_opts[q3_name]
@@ -1019,15 +1314,22 @@ if PAGE == "冠軍密碼":
                 change = after.mean() / before.mean() - 1
                 lines.append(f"<b>差距變化：</b>2019 年後平均標準差 {format(after.mean(), q3_fmt)}，"
                              f"之前 {format(before.mean(), q3_fmt)}（{change:+.0%}）。"
-                             + ("差距確實變小。" if change < 0 else "差距並沒有變小，這個假設要再想想。"))
+                             + ("差距變小了。" if change < 0 else "差距沒有變小。"))
             if len(ch_recent):
                 k = int((ch_recent["rk_net_rating"] == 1).sum())
                 lines.append(f"<b>最強的隊不一定奪冠：</b>2019 年後 {len(ch_recent)} 位冠軍中，"
                              f"只有 {k} 位是例行賽淨效率第 1 名。")
-            insight(lines, where=q3_slot)
+            q3_check = None
+            if len(before) and len(after):
+                q3_check = ("成立：2019 年後標準差比較小，強弱比較接近。" if after.mean() < before.mean()
+                            else "不成立：2019 年後標準差沒有變小，冠軍輪替不是因為大家實力變接近。")
+            insight(lines, where=q3_slot, label="發現", check=q3_check)
 
-            section("假設二：每支冠軍的打法都不同",
-                    "近年冠軍在各項打法的聯盟排名；顏色越深代表排名越前面。節奏第 1 = 最快，失誤少第 1 = 失誤最少")
+            st.markdown('<div id="q3-2"></div>', unsafe_allow_html=True)
+            q32_slot = section("3-2　每支冠軍的打法都不同嗎？",
+                    "近年冠軍在各項打法的聯盟排名；顏色越深代表排名越前面。節奏第 1 = 最快，失誤少第 1 = 失誤最少", level=2)
+            with q32_slot:
+                hypo_only("近年冠軍的打法各不相同：7 項打法中，沒有任何一項是每位冠軍都排聯盟前 10。")
             HS = CH[CH["season"] >= RECENT] if len(ch_recent) else CH.tail(8)
             labels = [f"{s} {team_label(a)}" for s, a in zip(HS["season"], HS["abbreviation"])]
             for _, col, hb in STYLE:   # 節奏、失誤少的排名
@@ -1049,7 +1351,16 @@ if PAGE == "冠軍密碼":
             fig.update_yaxes(autorange="reversed", showgrid=False)
             fig.update_xaxes(showgrid=False, side="top")
             st.plotly_chart(style(fig, 90 + 46 * len(labels)), width="stretch")
-            st.caption("讀法：如果每一列亮的位置都不同，代表冠軍靠的是不同的打法，沒有單一的致勝公式。")
+            zdf = pd.DataFrame(zr, columns=[x[0] for x in STYLE])
+            all10 = [c for c in zdf.columns if (zdf[c] <= 10).all()]
+            most = (zdf <= 10).mean().sort_values(ascending=False)
+            insight(where=q32_slot, label="發現", lines=[
+                (f"{len(labels)} 位近年冠軍都排前 10 的打法：{'、'.join(all10)}。" if all10 else
+                 f"{len(labels)} 位近年冠軍中，沒有任何一項打法是每位都排聯盟前 10。"),
+                f"最多冠軍排前 10 的是<b>{most.index[0]}</b>（{most.iloc[0]:.0%}）；最少的是<b>{most.index[-1]}</b>（{most.iloc[-1]:.0%}）。",
+                "讀法：如果每一列亮的位置都不同，代表冠軍靠的是不同的打法，沒有單一的致勝公式。",
+            ], check=("成立：冠軍打法各不相同，沒有單一的致勝公式。" if not all10
+                      else f"不成立：{'、'.join(all10)}是每位近年冠軍的共同點。"))
 
 
 # ---------- 每日戰報：昨晚發生什麼事？（全聯盟比分、值得關注的球員、球隊隱憂、戰績榜）----------
@@ -2451,7 +2762,7 @@ if PAGE == "戰術使用":
                 fig.update_xaxes(showgrid=False, side="top")
                 st.plotly_chart(style(fig, 90 + 42 * len(hm)), width="stretch")
                 strong = [PLAY_ZH.get(p, p) for p in hm.index[hm["中位數"] <= 10]]
-                st.caption("讀法：橫著看一列，如果八位冠軍大多在前 10 名（深紫色），這個戰術就是「冠軍共同點」。"
+                how_read("橫著看一列，如果八位冠軍大多在前 10 名（深紫色），這個戰術就是「冠軍共同點」。"
                            + (f"目前中位數在前 10 名的：{'、'.join(strong)}。" if strong else
                               "目前沒有任何戰術的中位數在前 10 名：冠軍各有各的打法。")
                            + "改成「使用率」，就能檢查假設：如果使用率排名分散、效率排名集中在前面，代表冠軍贏在效率。")
@@ -2574,7 +2885,7 @@ if PAGE == "戰術使用":
             fig.update_yaxes(autorange="reversed", showgrid=False)
             fig.update_xaxes(showgrid=False, side="top")
             st.plotly_chart(style(fig, 90 + 30 * len(hm)), width="stretch")
-            st.caption("讀法：上面幾列是勝率最高的球隊。直著看一欄，如果深色集中在上半部、淺色在下半部，"
+            how_read("上面幾列是勝率最高的球隊。直著看一欄，如果深色集中在上半部、淺色在下半部，"
                        "代表這個戰術「打得好的隊伍比較會贏」。30 隊時格子裡不寫數字，把滑鼠移到格子上就能看到。")
 
         # ===== 奪冠方程式 =====
@@ -3286,6 +3597,402 @@ if PAGE == "籤運與傷兵":
 """)
 
 
+# ---------- 跑動距離：冠軍跑得比較多嗎？ ----------
+def corr_word(r):
+    a = abs(r)
+    return "幾乎沒有關係" if a < 0.1 else "弱相關" if a < 0.3 else "中等相關" if a < 0.5 else "強相關"
+
+
+if PAGE == "跑動距離":
+    hypothesis("冠軍隊是不是跑得比較多、比較快？跑得多和贏球有沒有關係？",
+               "跑動不是奪冠的關鍵：冠軍的跑動距離在聯盟多半排中段，「比同季聯盟多跑」和勝率只有弱相關（|r| < 0.3）。")
+    status = table_status("tracking_speed")
+    TR = prep_tracking(load_tracking("team"), league) if status == "ok" else pd.DataFrame()
+    if TR.empty:
+        st.info("尚未載入資料，請執行 python load_extra.py --only tracking"
+                + ("（資料表還沒建立，請先在 Supabase SQL Editor 執行 schema_extra.sql）" if status == "missing" else ""))
+    else:
+        c1, c2 = st.columns([2, 3])
+        with c1:
+            tr_type = seg("比賽類型", ["例行賽", "季後賽"], "tr_type")
+        st_code = TYPE_OPTIONS[tr_type]
+        T = TR[TR["season_type"] == st_code]
+        tr_seasons = sorted(T["season"].unique())
+        if not tr_seasons:
+            st.info(f"還沒有{tr_type}的跑動數據。")
+        else:
+            with c2:
+                tr_season = st.selectbox("球季", tr_seasons[::-1], key="tr_season",
+                                         format_func=lambda x: x + ("　★" if any(s_ == x for s_, _ in CHAMP_SET) else ""))
+
+            # ===== 1. 各隊跑動地圖 =====
+            slot1 = section(f"1　{tr_season} 各隊跑動地圖",
+                            "每個點是一支球隊：橫軸每場跑幾公里、縱軸平均速度；虛線是聯盟平均，★ 是當季冠軍")
+            cur = T[T["season"] == tr_season].dropna(subset=["dist_km"])
+            fig = go.Figure()
+            others = cur[~cur["champion"]]
+            fig.add_trace(go.Scatter(
+                x=others["dist_km"], y=others["spd"], mode="markers+text", text=others["abbreviation"],
+                textposition="top center", textfont=dict(size=10, color=INK_2), name="其他球隊",
+                marker=dict(size=10, color="#b3adc2", line=dict(width=1, color=SURFACE)),
+                hovertemplate="%{text}<br>每場 %{x:.2f} 公里<br>平均 %{y:.2f} 公里／小時<extra></extra>"))
+            chs = cur[cur["champion"]]
+            if len(chs):
+                fig.add_trace(go.Scatter(
+                    x=chs["dist_km"], y=chs["spd"], mode="markers+text", text=chs["abbreviation"],
+                    textposition="top center", textfont=dict(size=11, color=INK), name="冠軍",
+                    marker=dict(symbol="star", size=18, color=[TEAM_COLORS.get(a, ACCENT) for a in chs["abbreviation"]],
+                                line=dict(width=1.2, color=SURFACE)),
+                    hovertemplate="★ 冠軍 %{text}<br>每場 %{x:.2f} 公里<br>平均 %{y:.2f} 公里／小時<extra></extra>"))
+            fig.add_vline(x=cur["dist_km"].mean(), line=dict(color=MUTED, dash="dot", width=1))
+            fig.add_hline(y=cur["spd"].mean(), line=dict(color=MUTED, dash="dot", width=1))
+            fig.update_xaxes(title="每場跑動距離（公里，越右跑越多）")
+            fig.update_yaxes(title="平均速度（公里／小時）")
+            fig.update_layout(showlegend=False)
+            st.plotly_chart(style(fig, 440), width="stretch")
+            lines = []
+            if len(chs):
+                r0 = chs.iloc[0]
+                lines.append(f"{tr_season} 冠軍 <b>{team_label(r0['abbreviation'])}</b> 每場跑 {r0['dist_km']:.1f} 公里，"
+                             f"聯盟第 {r0['rk_dist_km']:.0f} 名；平均速度第 {r0['rk_spd']:.0f} 名。")
+            top = cur.sort_values("dist_km", ascending=False).iloc[0]
+            lines.append(f"這季跑最多的是 {team_label(top['abbreviation'])}（{top['dist_km']:.1f} 公里，勝率聯盟第 {top['rk_win']:.0f} 名）；"
+                         f"最多和最少只差 {cur['dist_km'].max() - cur['dist_km'].min():.1f} 公里。")
+            insight(lines, where=slot1, label="發現")
+
+            # ===== 2. 每一位冠軍排第幾 =====
+            st.divider()
+            slot2 = section("2　每一位冠軍的跑動排第幾？", "聯盟排名 1＝跑最多／最快；最後一欄是勝率排名，拿來對照")
+            CHT = T[T["champion"]].sort_values("season")
+            if CHT.empty:
+                st.info("跑動數據的球季裡沒有已完成的冠軍球季。")
+            else:
+                tb = pd.DataFrame({
+                    "球季": CHT["season"], "冠軍": [team_label(a) for a in CHT["abbreviation"]],
+                    "每場公里": CHT["dist_km"].map(lambda v: f"{v:.1f}"),
+                    "距離排名": CHT["rk_dist_km"].map(lambda v: f"第 {v:.0f}"),
+                    "速度排名": CHT["rk_spd"].map(lambda v: f"第 {v:.0f}"),
+                    "進攻速度": CHT["rk_spd_off"].map(lambda v: f"第 {v:.0f}"),
+                    "防守速度": CHT["rk_spd_def"].map(lambda v: f"第 {v:.0f}"),
+                    "勝率排名": CHT["rk_win"].map(lambda v: "-" if pd.isna(v) else f"第 {v:.0f}"),
+                    "_key": CHT["abbreviation"],
+                    "_bar": 1 - (CHT["rk_dist_km"] - 1) / 29,
+                })
+                nice_table(tb, num_cols=("每場公里", "距離排名", "速度排名", "進攻速度", "防守速度", "勝率排名"),
+                           dot_col="冠軍", colors=TEAM_COLORS, bars={"距離排名": "_bar"})
+                med = CHT["rk_dist_km"].median()
+                mid = int(CHT["rk_dist_km"].between(8, 23).sum())
+                top10 = int((CHT["rk_dist_km"] <= 10).sum())
+                insight(where=slot2, label="發現", lines=[
+                    f"{len(CHT)} 位冠軍的跑動距離排名中位數是第 {med:.0f} 名；排前 10 的只有 {top10} 位。",
+                    f"排在中段（第 8～23 名）的有 {mid} 位；同一批冠軍的勝率排名中位數是第 {CHT['rk_win'].median():.0f} 名。",
+                ], check=("成立：冠軍多半排中段，不是靠跑得多。" if 8 <= med <= 23 else
+                          ("不成立：冠軍多半跑得比別人多。" if med < 8 else "不成立：冠軍反而多半跑得比較少。")))
+
+            # ===== 3. 跑得多和贏球有關嗎 =====
+            st.divider()
+            slot3 = section("3　跑得多和贏球有關嗎？",
+                            "每個點是一隊一季：橫軸是「比同季聯盟平均多多少」（排除年代差異），縱軸是勝率；★ 是冠軍")
+            tr_m = pills("指標", list(TRACK_OPTS), "tr_metric", default="每場跑動距離")
+            col, unit = TRACK_OPTS[tr_m]
+            A = T.dropna(subset=[f"d_{col}", "win_pct"])
+            if len(A) < 10:
+                st.info("資料不足，無法計算相關係數。")
+            else:
+                r = A[f"d_{col}"].corr(A["win_pct"])
+                fig = go.Figure()
+                o = A[~A["champion"]]
+                fig.add_trace(go.Scatter(x=o[f"d_{col}"], y=o["win_pct"], mode="markers", name="其他球隊季",
+                                         marker=dict(size=7, color="#c9c3d6", opacity=0.75, line=dict(width=0.5, color=SURFACE)),
+                                         text=[f"{s_} {team_label(a_)}" for s_, a_ in zip(o["season"], o["abbreviation"])],
+                                         hovertemplate="%{text}<br>比聯盟 %{x:+.2f} " + unit + "<br>勝率 %{y:.1%}<extra></extra>"))
+                c = A[A["champion"]]
+                fig.add_trace(go.Scatter(x=c[f"d_{col}"], y=c["win_pct"], mode="markers+text", name="冠軍",
+                                         text=[f"{s_[2:4]}{s_[5:]} {a_}" for s_, a_ in zip(c["season"], c["abbreviation"])],
+                                         textposition="top center", textfont=dict(size=10, color=INK_2),
+                                         marker=dict(symbol="star", size=15, color=ACCENT, line=dict(width=1, color=SURFACE)),
+                                         hovertemplate="★ %{text}<br>比聯盟 %{x:+.2f} " + unit + "<br>勝率 %{y:.1%}<extra></extra>"))
+                fig.add_vline(x=0, line=dict(color=MUTED, dash="dot", width=1))
+                fig.update_xaxes(title=f"{tr_m}：比同季聯盟平均多多少（{unit}）")
+                fig.update_yaxes(title="勝率", tickformat=".0%")
+                st.plotly_chart(style(fig, 420), width="stretch")
+                insight(where=slot3, label="發現", lines=[
+                    f"{tr_m}和勝率的相關係數 r = {r:+.2f}（{corr_word(r)}），共 {len(A)} 個球隊季。",
+                    f"冠軍的★ 有 {int((c[f'd_{col}'] > 0).sum())} / {len(c)} 個在虛線右邊（比同季聯盟平均{'多' if col == 'dist_km' else '快'}）。",
+                    "讀法：點如果像一團雲，就是沒什麼關係；如果排成從左下到右上的斜線，就是「跑越多越會贏」。"
+                    "相關係數 0.1 以下幾乎沒關係、0.3 以上算中等。",
+                ], check=("成立：|r| < 0.3，跑得多和勝率只有弱相關。" if abs(r) < 0.3 else
+                          f"不成立：|r| = {abs(r):.2f}，跑動和勝率有明顯關係。"))
+
+            # ===== 4. 隊上誰跑最多 =====
+            st.divider()
+            slot4 = section(f"4　{tr_season} 隊上誰跑最多？", "每 36 分鐘跑動＝把上場時間換算成同樣 36 分鐘，替補和先發才能公平比較")
+            champs_, others_ = split_teams([a for a in cur["abbreviation"].dropna().unique()], tr_season, tr_season)
+            others_ = sorted(others_)
+            tr_team = team_picker_one(champs_, others_, "tr_team", "當季冠軍", "其他球隊")
+            P = load_tracking("player")
+            if P.empty:
+                st.info("尚未載入資料，請執行 python load_extra.py --only tracking")
+            else:
+                P = P[(P["season"] == tr_season) & (P["season_type"] == st_code)].copy()
+                tid = cur.loc[cur["abbreviation"] == tr_team, "id"]
+                P["team_id"] = pd.to_numeric(P["team_id"], errors="coerce")
+                P = P[P["team_id"].isin(tid)] if len(tid) else P.iloc[0:0]
+                for c_ in ["gp", "min", "dist_miles", "avg_speed"]:
+                    P[c_] = pd.to_numeric(P[c_], errors="coerce")
+                P = P[(P["gp"] >= 5) & (P["min"] > 0)]
+                if P.empty:
+                    st.info("這隊這季沒有球員跑動數據（出賽至少 5 場）。")
+                else:
+                    P["km"] = P["dist_miles"] * KM
+                    P["km36"] = P["km"] / P["min"] * 36
+                    P = P.sort_values("km", ascending=False).head(10)
+                    nice_table(pd.DataFrame({
+                        "球員": P["name"], "出賽": P["gp"].map(lambda v: f"{v:.0f}"),
+                        "場均分鐘": P["min"].map(lambda v: f"{v:.1f}"), "每場公里": P["km"].map(lambda v: f"{v:.2f}"),
+                        "每 36 分鐘公里": P["km36"].map(lambda v: f"{v:.2f}"),
+                        "平均速度": (P["avg_speed"] * KM).map(lambda v: f"{v:.2f}"),
+                        "_b": P["km"] / P["km"].max()}),
+                        num_cols=("出賽", "場均分鐘", "每場公里", "每 36 分鐘公里", "平均速度"), bars={"每場公里": "_b"})
+                    t1, t36 = P.iloc[0], P.sort_values("km36", ascending=False).iloc[0]
+                    insight(where=slot4, to_summary=False, lines=[
+                        f"{team_label(tr_team)} 每場跑最多的是 <b>{t1['name']}</b>（{t1['km']:.2f} 公里）；"
+                        f"換算每 36 分鐘最多的是 <b>{t36['name']}</b>（{t36['km36']:.2f} 公里）。"])
+
+
+# ---------- 賽程與休息：背靠背會不會輸比較多？ ----------
+REST_CATS = ["背靠背", "休息 1 天", "休息 2 天", "休息 3 天以上"]
+
+
+def rest_cat(n):
+    return REST_CATS[min(int(n), 3)]
+
+
+def prep_rest(d):
+    """同一隊同一季、和前一場差幾天 − 1 ＝休息天數（0 ＝背靠背）"""
+    d = d[d["season_type"] == "Regular Season"].dropna(subset=["game_date"]).sort_values(["team_id", "season", "game_date"]).copy()
+    gap = d.groupby(["team_id", "season"])["game_date"].diff().dt.days
+    d["rest_days"] = gap - 1
+    d = d.dropna(subset=["rest_days"])
+    d = d[d["rest_days"] >= 0]
+    d["cat"] = d["rest_days"].map(rest_cat)
+    return d
+
+
+if PAGE == "賽程與休息":
+    hypothesis("背靠背（連兩天出賽）的第二場，球隊會不會比較常輸？冠軍是不是比較不怕累？",
+               "所有球隊在背靠背第二場的勝率，都比休息 1 天以上低；但奪冠那季的冠軍，背靠背勝率掉得比其他球隊少。")
+    TG = team_games_with_abbr()
+    if TG.empty:
+        st.info("尚未載入資料，請執行 python load_to_supabase.py（球隊逐場比賽還沒有寫進資料庫）")
+    else:
+        R = prep_rest(TG)
+        n_teams = R["abbreviation"].nunique()
+        st.caption(f"目前用資料庫已載入比賽的 {n_teams} 隊、{R['season'].nunique()} 季例行賽計算（每天自動增加 2 隊）。")
+
+        # ===== 1. 休息越少，勝率越低嗎？ =====
+        slot1 = section("1　休息越少，勝率越低嗎？", "紫色＝奪冠球季的冠軍，灰色＝其他球隊季；長條上的數字是場數")
+        g = R.groupby(["cat", "champion"]).agg(win=("win", "mean"), n=("win", "size")).reset_index()
+        fig = go.Figure()
+        for chp, name, colr in [(False, "其他球隊季", "#b3adc2"), (True, "奪冠球季的冠軍", ACCENT)]:
+            sub = g[g["champion"] == chp].set_index("cat").reindex(REST_CATS)
+            fig.add_trace(go.Bar(x=REST_CATS, y=sub["win"], name=name, marker_color=colr,
+                                 text=[f"{v:.0%}" if pd.notna(v) else "" for v in sub["win"]], textposition="outside",
+                                 customdata=sub["n"].fillna(0).astype(int),
+                                 hovertemplate=name + "<br>%{x}：勝率 %{y:.1%}（%{customdata} 場）<extra></extra>"))
+        rounded(fig)
+        fig.add_hline(y=0.5, line=dict(color=MUTED, dash="dot", width=1))
+        fig.update_yaxes(title="勝率", tickformat=".0%", range=[0, 1])
+        fig.update_layout(barmode="group")
+        st.plotly_chart(style(fig, 380), width="stretch")
+        o = g[~g["champion"]].set_index("cat")["win"]
+        c = g[g["champion"]].set_index("cat")["win"]
+        lines, check = [], None
+        if "背靠背" in o.index:
+            o_rest = R[(~R["champion"]) & (R["rest_days"] >= 1)]["win"].mean()
+            o_drop = o_rest - o["背靠背"]
+            lines.append(f"其他球隊在背靠背第二場的勝率 {o['背靠背']:.0%}，休息 1 天以上是 {o_rest:.0%}，"
+                         f"{'低' if o_drop > 0 else '高'} {abs(o_drop) * 100:.0f} 個百分點。")
+            if "背靠背" in c.index:
+                c_rest = R[R["champion"] & (R["rest_days"] >= 1)]["win"].mean()
+                c_drop = c_rest - c["背靠背"]
+                lines.append(f"奪冠球季的冠軍：背靠背 {c['背靠背']:.0%}、有休息 {c_rest:.0%}，"
+                             f"背靠背{'低' if c_drop > 0 else '高'} {abs(c_drop) * 100:.0f} 個百分點"
+                             f"（其他球隊{'低' if o_drop > 0 else '高'} {abs(o_drop) * 100:.0f}）。")
+                check = (("成立：背靠背的確比較常輸，而且冠軍掉得比較少。" if c_drop < o_drop else
+                          "一半成立：背靠背的確比較常輸，但冠軍並沒有掉得比較少。") if o_drop >= 0.02 else
+                         "不成立：背靠背的勝率沒有明顯比較低（差不到 2 個百分點）。")
+        insight(lines, where=slot1, label="發現", check=check)
+
+        # ===== 2. 每一位冠軍：背靠背 vs 有休息 =====
+        st.divider()
+        slot2 = section("2　每一位冠軍：背靠背 vs 有休息", "灰點＝休息 1 天以上的勝率，彩色點＝背靠背的勝率；括號是背靠背場數")
+        C = R[R["champion"]]
+        if C.empty:
+            st.info("資料庫裡還沒有冠軍球季的逐場比賽。")
+        else:
+            rows = []
+            for (s_, a_), gg in C.groupby(["season", "abbreviation"]):
+                b2b = gg[gg["rest_days"] == 0]
+                rows.append({"season": s_, "abbr": a_, "b2b": b2b["win"].mean() if len(b2b) else float("nan"),
+                             "n": len(b2b), "rest": gg[gg["rest_days"] >= 1]["win"].mean()})
+            D = pd.DataFrame(rows).sort_values("season")
+            labels = [f"{s_} {team_label(a_)}（{n}）" for s_, a_, n in zip(D["season"], D["abbr"], D["n"])]
+            fig = go.Figure()
+            for lab, (_, r_) in zip(labels, D.iterrows()):
+                fig.add_trace(go.Scatter(x=[r_["rest"], r_["b2b"]], y=[lab, lab], mode="lines",
+                                         line=dict(color="#d6d2df", width=3), showlegend=False, hoverinfo="skip"))
+            fig.add_trace(go.Scatter(x=D["rest"], y=labels, mode="markers", name="有休息",
+                                     marker=dict(size=12, color="#b3adc2", line=dict(width=1, color=SURFACE)),
+                                     hovertemplate="%{y}<br>有休息：%{x:.1%}<extra></extra>"))
+            fig.add_trace(go.Scatter(x=D["b2b"], y=labels, mode="markers", name="背靠背",
+                                     marker=dict(size=13, color=[TEAM_COLORS.get(a, ACCENT) for a in D["abbr"]],
+                                                 line=dict(width=1, color=SURFACE)),
+                                     hovertemplate="%{y}<br>背靠背：%{x:.1%}<extra></extra>"))
+            fig.update_xaxes(title="勝率", tickformat=".0%")
+            fig.update_yaxes(autorange="reversed", showgrid=False, type="category")
+            st.plotly_chart(style(fig, 90 + 30 * len(D)), width="stretch")
+            worse = int((D["b2b"] < D["rest"]).sum())
+            insight(where=slot2, label="發現", lines=[
+                f"{len(D)} 個冠軍球季中，有 {worse} 個背靠背的勝率比有休息時低（彩色點在灰點左邊）。",
+                f"冠軍每季平均 {D['n'].mean():.0f} 場背靠背；場數少，單一球季的差距要保守解讀。",
+            ])
+
+        # ===== 3. 聯盟賽程：背靠背一年比一年少嗎？ =====
+        st.divider()
+        slot3 = section("3　背靠背一年比一年少嗎？", "每季平均每隊幾場背靠背（只算已載入的球隊）；縮短的球季（2011-12、2019-20、2020-21）場數本來就不同")
+        per = (R.assign(b=R["rest_days"] == 0).groupby(["season", "abbreviation"])["b"].sum()
+               .groupby("season").mean())
+        per = per[per.index.isin(sorted(R["season"].unique()))]
+        fig = go.Figure(go.Scatter(x=per.index, y=per.values, mode="lines+markers", line=dict(color=ACCENT, width=2.4),
+                                   marker=dict(size=7, color=ACCENT, line=dict(width=1.5, color=SURFACE)),
+                                   hovertemplate="%{x}：平均每隊 %{y:.1f} 場背靠背<extra></extra>"))
+        fig.update_xaxes(type="category")
+        fig.update_yaxes(title="平均每隊背靠背場數", rangemode="tozero")
+        st.plotly_chart(style(fig, 320), width="stretch")
+        if len(per) > 1:
+            insight(where=slot3, label="發現", lines=[
+                f"平均每隊背靠背從 {per.index[0]} 的 {per.iloc[0]:.1f} 場，變成 {per.index[-1]} 的 {per.iloc[-1]:.1f} 場"
+                + ("（最新一季還沒打完，場數會再增加）。" if per.index[-1] == ALL_SEASONS[-1] else "。"),
+                "背靠背越少，「累不累」對跨年代比較的影響就越小。"])
+
+
+# ---------- 主場與客場：冠軍的主場優勢比較大嗎？ ----------
+NO_CROWD = {"2019-20": "復賽在泡泡園區，沒有真正的主場", "2020-21": "多數場館限制或不開放觀眾"}
+
+
+def home_away(d):
+    """每隊每季：主場勝率、客場勝率、主場優勢（百分點）"""
+    g = d.groupby(["season", "abbreviation", "is_home"])["win"].agg(["mean", "size"]).unstack("is_home")
+    out = pd.DataFrame({"home": g[("mean", True)], "away": g[("mean", False)],
+                        "n_home": g[("size", True)], "n_away": g[("size", False)]}).reset_index()
+    out["adv"] = (out["home"] - out["away"]) * 100
+    out["champion"] = [(s_, a_) in CHAMP_SET for s_, a_ in zip(out["season"], out["abbreviation"])]
+    return out.dropna(subset=["home", "away"])
+
+
+if PAGE == "主場與客場":
+    hypothesis("冠軍是不是特別靠主場？主場優勢（主場勝率 − 客場勝率）有沒有比其他球隊大？",
+               "冠軍強在「客場也能贏」：奪冠季的主場優勢比其他球隊季小；而且全聯盟的主場優勢一年比一年小。")
+    TG = team_games_with_abbr()
+    if TG.empty or "is_home" not in TG:
+        st.info("尚未載入資料，請執行 python load_to_supabase.py（球隊逐場比賽還沒有寫進資料庫）")
+    else:
+        TG = TG.dropna(subset=["is_home"]).copy()
+        TG["is_home"] = TG["is_home"].astype(bool)
+        REG = TG[TG["season_type"] == "Regular Season"]
+        HA = home_away(REG)
+        st.caption(f"目前用資料庫已載入比賽的 {HA['abbreviation'].nunique()} 隊、{HA['season'].nunique()} 季計算（每天自動增加 2 隊）。"
+                   "對照組是同一批球隊的其他球季。")
+
+        # ===== 1. 冠軍 vs 其他球隊 =====
+        slot1 = section("1　冠軍的主場優勢比較大嗎？", "每個點是一隊一季：橫軸客場勝率、縱軸主場勝率；斜虛線上＝主客場一樣，越往左上主場優勢越大")
+        fig = go.Figure()
+        o = HA[~HA["champion"]]
+        fig.add_trace(go.Scatter(x=o["away"], y=o["home"], mode="markers", name="其他球隊季",
+                                 marker=dict(size=7, color="#c9c3d6", opacity=0.8, line=dict(width=0.5, color=SURFACE)),
+                                 text=[f"{s_} {team_label(a_)}" for s_, a_ in zip(o["season"], o["abbreviation"])],
+                                 hovertemplate="%{text}<br>客場 %{x:.1%}　主場 %{y:.1%}<extra></extra>"))
+        c = HA[HA["champion"]]
+        fig.add_trace(go.Scatter(x=c["away"], y=c["home"], mode="markers+text", name="冠軍",
+                                 text=[f"{s_[2:4]}{s_[5:]} {a_}" for s_, a_ in zip(c["season"], c["abbreviation"])],
+                                 textposition="top center", textfont=dict(size=10, color=INK_2),
+                                 marker=dict(symbol="star", size=15, color=ACCENT, line=dict(width=1, color=SURFACE)),
+                                 hovertemplate="★ %{text}<br>客場 %{x:.1%}　主場 %{y:.1%}<extra></extra>"))
+        fig.add_shape(type="line", x0=0, y0=0, x1=1, y1=1, line=dict(color=MUTED, dash="dot", width=1))
+        fig.update_xaxes(title="客場勝率", tickformat=".0%", range=[0, 1])
+        fig.update_yaxes(title="主場勝率", tickformat=".0%", range=[0, 1])
+        st.plotly_chart(style(fig, 460), width="stretch")
+        o_adv, c_adv = o["adv"].mean(), c["adv"].mean()
+        lines = [f"其他球隊季平均主場勝率比客場高 {o_adv:.0f} 個百分點；奪冠球季的冠軍是 {c_adv:.0f} 個百分點"
+                 + (f"（{len(c)} 個冠軍球季）。" if len(c) else "。")]
+        if len(c):
+            lines.append(f"冠軍的客場勝率平均 {c['away'].mean():.0%}，比其他球隊季的主場勝率（{o['home'].mean():.0%}）"
+                         f"{'還高' if c['away'].mean() > o['home'].mean() else '低'}。")
+        insight(lines, where=slot1, label="發現",
+                check=(None if not len(c) else "成立：冠軍的主場優勢比較小，強在客場也能贏。" if c_adv < o_adv - 1
+                       else "不成立：冠軍的主場優勢和其他球隊差不多（差不到 1 個百分點）。" if c_adv <= o_adv + 1
+                       else "不成立：冠軍的主場優勢比其他球隊大。"))
+
+        # ===== 2. 主場優勢一年比一年小嗎？ =====
+        st.divider()
+        slot2 = section("2　主場優勢一年比一年小嗎？", "每季所有已載入球隊的平均主場優勢（主場勝率 − 客場勝率）；淡紫色直條是沒有正常觀眾的球季")
+        per = HA.groupby("season")["adv"].mean()
+        seas = list(per.index)
+        fig = go.Figure()
+        for s_ in NO_CROWD:
+            if s_ in seas:
+                i = seas.index(s_)
+                fig.add_vrect(x0=i - 0.5, x1=i + 0.5, fillcolor="rgba(167,139,250,0.12)", line_width=0, layer="below")
+        fig.add_trace(go.Scatter(x=seas, y=per.values, mode="lines+markers", line=dict(color=ACCENT, width=2.4),
+                                 marker=dict(size=7, color=ACCENT, line=dict(width=1.5, color=SURFACE)),
+                                 customdata=[NO_CROWD.get(s_, "") for s_ in seas],
+                                 hovertemplate="%{x}：主場優勢 %{y:+.1f} 個百分點<br>%{customdata}<extra></extra>"))
+        fig.add_hline(y=0, line=dict(color=INK_2, width=1))
+        fig.update_xaxes(type="category", categoryorder="array", categoryarray=seas)
+        fig.update_yaxes(title="主場勝率 − 客場勝率（百分點）")
+        st.plotly_chart(style(fig, 340), width="stretch")
+        if len(per) >= 6:
+            normal = per[~per.index.isin(list(NO_CROWD))]
+            early, late = normal.iloc[:5].mean(), normal.iloc[-5:].mean()
+            nc = per[per.index.isin(list(NO_CROWD))]
+            lines = [f"前 5 季平均主場優勢 {early:+.1f} 個百分點，最近 5 季 {late:+.1f}（不算沒有觀眾的球季）。"]
+            if len(nc):
+                lines.append("沒有正常觀眾的球季：" + "、".join(f"{s_} {v:+.1f}" for s_, v in nc.items()) + "。")
+            insight(lines, where=slot2, label="發現",
+                    check=("成立：主場優勢變小了。" if late < early - 1 else
+                           "不成立：前後差不到 1 個百分點，主場優勢沒有明顯變小。" if late <= early + 1 else
+                           "不成立：主場優勢反而變大了。"))
+
+        # ===== 3. 冠軍在季後賽的客場 =====
+        st.divider()
+        slot3 = section("3　冠軍在季後賽的主場與客場", "奪冠那季的季後賽：主場、客場各打幾勝幾敗；客場勝率越高，代表越不靠主場")
+        PO = TG[(TG["season_type"] == "Playoffs") & TG["champion"]]
+        if PO.empty:
+            st.info("資料庫裡還沒有冠軍的季後賽逐場比賽。")
+        else:
+            rows = []
+            for (s_, a_), gg in PO.groupby(["season", "abbreviation"]):
+                h, w_ = gg[gg["is_home"]], gg[~gg["is_home"]]
+                rows.append({"球季": s_, "冠軍": team_label(a_), "_key": a_,
+                             "主場": f"{int(h['win'].sum())} 勝 {len(h) - int(h['win'].sum())} 敗",
+                             "客場": f"{int(w_['win'].sum())} 勝 {len(w_) - int(w_['win'].sum())} 敗",
+                             "主場勝率": f"{h['win'].mean():.0%}" if len(h) else "-",
+                             "客場勝率": f"{w_['win'].mean():.0%}" if len(w_) else "-",
+                             "_aw": w_["win"].mean() if len(w_) else float("nan")})
+            PT = pd.DataFrame(rows).sort_values("球季")
+            nice_table(PT, num_cols=("主場", "客場", "主場勝率", "客場勝率"), dot_col="冠軍", colors=TEAM_COLORS,
+                       bars={"客場勝率": "_aw"})
+            tot_h = PO[PO["is_home"]]["win"].mean()
+            tot_a = PO[~PO["is_home"]]["win"].mean()
+            best = PT.loc[PT["_aw"].idxmax()] if PT["_aw"].notna().any() else None
+            insight(where=slot3, label="發現", lines=[
+                f"合計 {len(PT)} 位冠軍在季後賽：主場勝率 {tot_h:.0%}、客場勝率 {tot_a:.0%}。",
+                (f"客場最強的是 {best['球季']} {best['冠軍']}（客場 {best['客場']}）。" if best is not None else ""),
+                f"有 {int((PT['_aw'] >= 0.5).sum())} 位冠軍的季後賽客場勝率在五成以上。",
+            ])
+
+
 # ---------- 自動結論：用資料算出一句話，放在圖的上面 ----------
 def _diff_txt(v, f):
     return f"{v * 100:+.1f} 個百分點" if "%" in f else f"{v:+.2f}"
@@ -3679,5 +4386,87 @@ if PAGE == "數據表":
 | 勝率 | 贏球場數比例 | 勝場 ÷ 場數 |
 """)
 
+# =====================================================================
+# 每頁共用的結尾：頁首摘要、資料來源與方法、相關頁面、上一頁／下一頁（1030-1、1030-2、1030-4）
+# =====================================================================
+# 相關頁面：（頁面, 為什麼要接著看）
+RELATED = {
+    "每日戰報": [("球季趨勢", "把今天的表現放回 20 季的長期走勢裡看"), ("冠軍密碼", "強隊和冠軍差在哪裡")],
+    "冠軍密碼": [("投籃分布", "Q2 的三分趨勢，換成球場上的出手位置來看"), ("戰術使用", "淨效率高，是靠哪些戰術打出來的"),
+             ("籤運與傷兵", "Q3 說最強的隊不一定奪冠，那是不是靠運氣")],
+    "投籃分布": [("戰術使用", "出手位置背後，是哪一種戰術創造的"), ("冠軍密碼", "三分時代有沒有造就冠軍（Q2）")],
+    "戰術使用": [("投籃分布", "戰術最後換成哪些位置的出手"), ("上場陣容", "誰在場上執行這些戰術")],
+    "上場陣容": [("跑動距離", "核心五人上場時，球隊跑得多不多"), ("戰術使用", "核心陣容最常打什麼戰術"),
+             ("賽程與休息", "上場時間多，背靠背時會不會撐不住")],
+    "跑動距離": [("賽程與休息", "跑得多的隊，背靠背時會不會比較吃虧"), ("上場陣容", "誰跑最多，是不是核心五人")],
+    "籤運與傷兵": [("賽程與休息", "另一種「運氣」：賽程密度"), ("主場與客場", "季後賽的主場優勢有多大"),
+              ("冠軍密碼", "冠軍的實力排名（Q1）")],
+    "賽程與休息": [("主場與客場", "另一個賽程因素：在哪裡打"), ("跑動距離", "累不累，也和跑多少有關")],
+    "主場與客場": [("賽程與休息", "客場常常也是背靠背，兩個因素一起看"), ("籤運與傷兵", "季後賽主場優勢和對手強弱")],
+    "球季趨勢": [("球隊 × 球季", "同一個指標，用熱力圖一次看完"), ("冠軍球季比較", "奪冠那季比平常強多少")],
+    "球隊 × 球季": [("球季趨勢", "選幾隊看折線，變化更清楚"), ("冠軍球季比較", "★ 那幾格和其他球季差多少")],
+    "冠軍球季比較": [("冠軍密碼", "冠軍在全聯盟排第幾"), ("球員", "奪冠那季是哪些球員撐起來的")],
+    "球員": [("冠軍球季比較", "球員的變化對球隊奪冠季的影響"), ("上場陣容", "球員和誰一起上場最久")],
+    "數據表": [("球季趨勢", "把表格變成折線圖"), ("球隊 × 球季", "把表格變成熱力圖")],
+}
+# 資料來源與方法：（用了哪些表, 範圍, 怎麼算）
+SOURCES = {
+    "冠軍密碼": ("league_team_seasons（全聯盟 30 隊每季）、champions", "例行賽、上方球季範圍內有冠軍的球季",
+             "每項指標在同一季 30 隊中排名（1＝最好；防守效率、失誤率越低越好）；聯盟平均用「全聯盟總數 ÷ 總數」，不是 30 隊平均的平均；"
+             "Q3 的實力差距用 30 隊淨效率（或勝率）的標準差。"),
+    "投籃分布": ("shots（每一次出手）、shot_zone_league（聯盟各區）、shot_zone_team／shot_zone_player 檢視表",
+             "2016-17 起；八支冠軍隊", "區域依 NBA 官方的 zone_basic／zone_area 分類；每次出手得分＝命中率 × 分值（三分區 3、其他 2）。"),
+    "戰術使用": ("playtypes_team（30 隊）、league_team_seasons、champions", "2016-17 起",
+             "使用率＝這種戰術的回合 ÷ 全部回合；每回合得分（PPP）＝得分 ÷ 回合；聯盟 PPP 用總得分 ÷ 總回合（加權）；"
+             "奪冠方程式用效率和勝率的相關係數當權重，權重和分數用同一批資料算，是描述不是預測。"),
+    "跑動距離": ("tracking_speed（entity＝team／player）、league_team_seasons（勝率）、champions", "2016-17 起；全聯盟 30 隊與所有球員",
+             "NBA 官方追蹤數據的每場平均跑動距離（英里，網站換算成公里，1 英里＝1.609 公里）與平均速度；"
+             "「比同季聯盟多多少」＝這隊 − 同季 30 隊平均，用來排除年代差異；相關係數 |r| < 0.1 幾乎沒有關係、0.3 以上算中等。"),
+    "賽程與休息": ("team_games（輸贏）、games（日期、球季、比賽類型）、champions", "只限資料庫已載入比賽的球隊（每天增加 2 隊）；例行賽",
+              "休息天數＝和同一季前一場相差的天數 − 1（0＝背靠背）；每季第一場沒有前一場，不列入；"
+              "只知道自己休息幾天，不知道對手是不是也在背靠背。"),
+    "主場與客場": ("team_games（is_home、輸贏）、games（球季、比賽類型）、champions", "只限資料庫已載入比賽的球隊（每天增加 2 隊）",
+              "主場優勢＝主場勝率 − 客場勝率（百分點）；季後賽只算冠軍那一季；2019-20 復賽在泡泡園區（沒有真正的主場）、"
+              "2020-21 多數場館限制觀眾，這兩季的主場優勢要分開看。"),
+    "球季趨勢": ("team_season_stats（由 player_game_stats 加總）", "上方選的球隊、球季、比賽類型", "各項指標由整季加總後再算比例（例如三分命中率＝三分命中總數 ÷ 三分出手總數）。"),
+    "球隊 × 球季": ("team_season_stats", "上方選的球隊、球季、比賽類型", "顏色由淺紫到深紫代表數值由低到高；★ 是奪冠球季。"),
+    "冠軍球季比較": ("team_season_stats、champions", "上方選的球隊、球季、比賽類型", "奪冠球季的數值 − 同一隊其他球季的平均。"),
+    "球員": ("player_season_stats、player_game_stats", "上方選的球隊、球季、比賽類型", "場均＝整季加總 ÷ 出賽場數；真實命中率＝得分 ÷［2 ×（出手 ＋ 0.44 × 罰球出手）］。"),
+    "數據表": ("team_season_stats", "上方選的球隊、球季、比賽類型", "可排序、下載 Excel；指標算法見表格下方「指標說明」。"),
+}
+OWN_SOURCES = {"每日戰報", "上場陣容", "籤運與傷兵"}   # 這幾頁本來就有自己的「資料來源與方法」
+
+
+def finish_page():
+    if PAGE == HOME:
+        return
+    if PAGE_FINDINGS and SUMMARY_SLOT is not None:
+        items = "".join(f"<li>{x}</li>" for x in list(dict.fromkeys(PAGE_FINDINGS))[:3])
+        SUMMARY_SLOT.markdown(f'<div class="summary"><div class="summary-k">摘要</div><ol>{items}</ol></div>',
+                              unsafe_allow_html=True)
+    if PAGE in SOURCES and PAGE not in OWN_SOURCES:
+        tables, scope, method = SOURCES[PAGE]
+        with st.expander("資料來源與方法"):
+            st.markdown(f'<div class="howread"><b>用到的資料表：</b>{tables}<br><b>範圍：</b>{scope}<br>'
+                        f'<b>怎麼算：</b>{method}<br>資料由 NBA 官方數據（nba_api）抓取，存進 Supabase，網站每 15 分鐘重新讀取。</div>',
+                        unsafe_allow_html=True)
+    rel = [(p_, why) for p_, why in RELATED.get(PAGE, []) if p_ in PAGE_INFO]
+    if rel:
+        st.markdown('<div class="foot-k">相關頁面</div>', unsafe_allow_html=True)
+        rcols = st.columns(3)
+        for col_, (p_, why) in zip(rcols, rel):
+            with col_:
+                st.button(f"{p_}　→", key=f"rel_{p_}", width="stretch", on_click=goto, args=(p_,))
+                st.markdown(f'<div class="foot-why">{why}</div>', unsafe_allow_html=True)
+    order = [p[1] for p in PAGES]
+    i = order.index(PAGE)
+    c1, _, c2 = st.columns([2, 3, 2])
+    if i > 0:
+        c1.button(f"←　上一頁：{order[i - 1]}", key="prev_page", width="stretch", on_click=goto, args=(order[i - 1],))
+    if i < len(order) - 1:
+        c2.button(f"下一頁：{order[i + 1]}　→", key="next_page", width="stretch", on_click=goto, args=(order[i + 1],))
+
+
+finish_page()
 st.markdown('<div class="footnote">DATA · NBA STATS API　｜　STORAGE · SUPABASE　｜　BUILT WITH STREAMLIT</div>',
             unsafe_allow_html=True)
