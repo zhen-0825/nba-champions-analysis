@@ -56,9 +56,11 @@ def games_to_load(client, season, days, everything):
     if tg.empty:
         return pd.DataFrame()
     try:
-        done = set(read_all(client, "pbp_game_flow", "game_id", [("eq", "season", season)])["game_id"])
-    except Exception:
-        raise SystemExit("找不到 pbp_game_flow 資料表：請先在 Supabase SQL Editor 執行 schema_pbp.sql")
+        fl = read_all(client, "pbp_game_flow", "game_id", [("eq", "season", season)])
+    except Exception as e:
+        raise SystemExit(f"讀不到 pbp_game_flow 資料表：{str(e)[:200]}\n"
+                         "如果訊息裡有 does not exist 或 schema cache，請先在 Supabase SQL Editor 執行 schema_pbp.sql")
+    done = set(fl["game_id"]) if "game_id" in fl else set()     # 第一次執行時表格是空的
     return pair_games(tg[~tg["game_id"].isin(done)])
 
 
