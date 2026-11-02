@@ -269,6 +269,51 @@ hr { border-color: var(--line) !important; }
 .headline-item { border-bottom: 1px solid var(--line); padding: 8px 2px 4px 2px; }
 .headline-item .hp { font-size: 0.74rem; color: var(--brand); font-weight: 700; }
 .headline-item .ht { font-size: 0.92rem; color: var(--ink); line-height: 1.55; }
+
+/* ===== 簡單的立體感（使用者 2026-11-02 要求）=====
+   做法：只用「底下一條實心陰影＋很淡的投影」，像實體按鍵；不用漸層、不發光。
+   按鈕：平常浮起 3px，滑鼠移上去再浮 1px，按下去整顆往下壓、陰影消失，點了有沒有反應一眼就知道。
+   卡片、圖表外框、表格：只加一層很淡的投影，和底色分開，不搶資料的目光。 */
+:root { --key-edge: #d4cde3; --key-edge-brand: #4c1d95; --lift: 0 6px 14px -10px rgba(40,24,80,0.45); }
+[data-testid="stMain"] .stButton > button,
+[data-testid="stMain"] .stDownloadButton > button {
+  background: #ffffff; border: 1px solid var(--key-edge) !important; color: var(--ink);
+  box-shadow: 0 3px 0 var(--key-edge), var(--lift); transform: translateY(0);
+  transition: transform 0.08s ease, box-shadow 0.08s ease, border-color 0.15s ease; }
+[data-testid="stMain"] .stButton > button:hover,
+[data-testid="stMain"] .stDownloadButton > button:hover {
+  border-color: #b9a6ee !important; transform: translateY(-1px);
+  box-shadow: 0 4px 0 #b9a6ee, 0 8px 16px -10px rgba(40,24,80,0.5); }
+[data-testid="stMain"] .stButton > button:active,
+[data-testid="stMain"] .stDownloadButton > button:active {
+  transform: translateY(3px); box-shadow: 0 0 0 var(--key-edge); }
+/* 主要按鈕（紫底白字）：底下一條深紫，像按鍵的側面 */
+[data-testid="stMain"] [data-testid="stBaseButton-primary"] {
+  background: var(--brand) !important; color: #ffffff !important; border-color: var(--brand) !important;
+  box-shadow: 0 3px 0 var(--key-edge-brand), var(--lift) !important; }
+[data-testid="stMain"] [data-testid="stBaseButton-primary"] p { color: #ffffff !important; }
+[data-testid="stMain"] [data-testid="stBaseButton-primary"]:hover { background: #6d28d9 !important;
+  box-shadow: 0 4px 0 var(--key-edge-brand), 0 8px 16px -10px rgba(40,24,80,0.5) !important; }
+[data-testid="stMain"] [data-testid="stBaseButton-primary"]:active { transform: translateY(3px);
+  box-shadow: 0 0 0 var(--key-edge-brand) !important; }
+/* 文字型按鈕（首頁重點發現的「前往 →」）維持平的，像連結 */
+[data-testid="stMain"] [data-testid="stBaseButton-tertiary"] {
+  background: transparent !important; border: none !important; box-shadow: none !important; color: var(--brand) !important; }
+/* 膠囊、分段選擇：小一號的按鍵；選到的那顆「按下去」（陰影變內凹），一眼看出選了哪個 */
+[data-testid="stBaseButton-pills"], [data-testid="stBaseButton-segmented_control"] {
+  background: #ffffff; box-shadow: 0 2px 0 var(--key-edge); transition: transform 0.08s ease, box-shadow 0.08s ease; }
+[data-testid="stBaseButton-pills"]:hover, [data-testid="stBaseButton-segmented_control"]:hover { transform: translateY(-1px); }
+[data-testid="stBaseButton-pillsActive"], [data-testid="stBaseButton-segmented_controlActive"] {
+  transform: translateY(2px); box-shadow: inset 0 2px 3px rgba(76,29,149,0.18) !important; font-weight: 700; }
+/* 卡片、數字卡、圖表、表格、可點開區塊：一層很淡的投影，浮在底色上 */
+.card, .kpi, .feature, .hypo, .toc, .ntable,
+[data-testid="stPlotlyChart"], [data-testid="stExpander"], [data-testid="stVerticalBlockBorderWrapper"] {
+  box-shadow: 0 1px 0 rgba(40,24,80,0.04), var(--lift); }
+.card:hover { transform: translateY(-2px); box-shadow: 0 2px 0 rgba(40,24,80,0.04), 0 12px 22px -12px rgba(76,29,149,0.45); }
+.card { transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease; }
+/* 左側黑色選單：目前所在頁面像「被按下去」的按鍵 */
+section[data-testid="stSidebar"] [data-testid="stBaseButton-primary"] { box-shadow: inset 0 2px 4px rgba(0,0,0,0.45) !important; }
+section[data-testid="stSidebar"] .stButton > button:active { transform: translateY(1px); }
 </style>
 """, unsafe_allow_html=True)
 
