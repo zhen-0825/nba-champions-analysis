@@ -1798,9 +1798,10 @@ def render_predictions(tg, season):
 <div class="rc-prob"><span style="width:{(1 - ph) * 100:.0f}%;background:{ca}"></span><span style="width:{ph * 100:.0f}%;background:{chh}"></span></div>
 <div class="rc-probtxt"><span>{g.away_abbr} {1 - ph:.0%}</span><span>{fav} 較有機會</span><span>{g.home_abbr} {ph:.0%}</span></div>
 <div class="rc-why">{"・".join(p["factors"])}</div>{players}</div>''')
-    cols = st.columns(3, gap="medium")
-    for i, c in enumerate(cards):
-        cols[i % 3].markdown(c, unsafe_allow_html=True)
+    with fold(f"{len(cards)} 場預測卡（勝率、預估比分、球員表現範圍）"):
+        cols = st.columns(3, gap="medium")
+        for i, c in enumerate(cards):
+            cols[i % 3].markdown(c, unsafe_allow_html=True)
 
     with st.expander("預測怎麼算的"):
         st.markdown(f"""
@@ -1818,6 +1819,12 @@ def render_predictions(tg, season):
 
 **沒有考慮的**：傷兵名單、先發陣容、交易、旅行距離、球員之間的對位。這些資料庫目前沒有。
 """)
+
+
+def fold(label):
+    """每日戰報的大區塊：可以收起來的框。最上面的「全部展開／全部收起」決定一開始是打開還是收起
+    （每個區塊的一句話結論放在框外面，收起來也看得到重點）"""
+    return st.expander(label, expanded=st.session_state.get("rc_open", "全部展開") == "全部展開")
 
 
 # ---------- 每日戰報：逐回合紀錄（比賽走勢、關鍵時刻、今日戰報稿）----------
@@ -1934,52 +1941,53 @@ def render_pbp(season, day, n_games, top, part):
     f = flow.copy()
     f["drama"] = [drama(r) for _, r in f.iterrows()]
     f = f.sort_values("drama", ascending=False)
-    opts = list(f["game_id"])
-    lab = {r["game_id"]: f"{r['away_abbr']} @ {r['home_abbr']}" + ("　★" if i == 0 else "")
-           for i, (_, r) in enumerate(f.iterrows())}
-    gid = pills("選一場比賽（★ 是今天最精彩的一場）", opts, f"pbp_game_{day:%m%d}", default=opts[0],
-                format_func=lambda g: lab.get(g, g))
-    r = f[f["game_id"] == gid].iloc[0]
-    e = ev[ev["game_id"] == gid].sort_values(["elapsed_sec", "action_number"])
-    if e.empty:
-        st.info("這場的逐回合紀錄還沒載入。")
-    else:
-        x = [0] + list(e["elapsed_sec"] / 60)
-        y = [0] + list(e["score_home"] - e["score_away"])
-        hc, ac = TEAM_COLORS.get(r["home_abbr"], ACCENT), TEAM_COLORS.get(r["away_abbr"], MUTED)
-        hov = ["開賽"] + [f"{period_name(p)} 剩 {int(c // 60)}:{int(c % 60):02d}<br>{n}（{t}）<br>"
-                          f"{r['away_abbr']} {int(sa)} – {int(sh)} {r['home_abbr']}"
-                          for p, c, n, t, sh, sa in zip(e["period"], e["clock_sec"].fillna(0), e["player_name"].fillna(""),
-                                                       e["action_type"], e["score_home"], e["score_away"])]
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=x, y=[max(v, 0) for v in y], mode="lines", line=dict(width=0, shape="hv"),
-                                 fill="tozeroy", fillcolor=hc, opacity=0.35, name=f"{r['home_abbr']} 領先", hoverinfo="skip"))
-        fig.add_trace(go.Scatter(x=x, y=[min(v, 0) for v in y], mode="lines", line=dict(width=0, shape="hv"),
-                                 fill="tozeroy", fillcolor=ac, opacity=0.35, name=f"{r['away_abbr']} 領先", hoverinfo="skip"))
-        fig.add_trace(go.Scatter(x=x, y=y, mode="lines", line=dict(color=INK, width=1.6, shape="hv"), name="分差",
-                                 text=hov, hovertemplate="%{text}<extra></extra>"))
-        n_per = int(e["period"].max())
-        ends = [12, 24, 36, 48] + [48 + 5 * k for k in range(1, max(0, n_per - 4) + 1)]
-        for xe in ends[:-1]:
-            fig.add_vline(x=xe, line=dict(color=MUTED, dash="dot", width=1))
-        fig.add_hline(y=0, line=dict(color=INK_2, width=1))
-        top_y = max(abs(v) for v in y) or 5
-        fig.add_annotation(x=1, y=top_y, xref="paper", xanchor="right", yanchor="top", showarrow=False,
-                           text=f"{r['home_abbr']} 領先 ↑", font=dict(size=11, color=hc))
-        fig.add_annotation(x=1, y=-top_y, xref="paper", xanchor="right", yanchor="bottom", showarrow=False,
-                           text=f"{r['away_abbr']} 領先 ↓", font=dict(size=11, color=ac))
-        fig.update_xaxes(title="比賽時間（分鐘）", tickvals=[0] + ends, range=[0, ends[-1]])
-        fig.update_yaxes(title=f"{r['home_abbr']} − {r['away_abbr']}（分）", range=[-top_y * 1.15, top_y * 1.15])
-        fig.update_layout(showlegend=False)
-        st.plotly_chart(style(fig, 340), width="stretch")
-        hp, ap = r["home_periods"] or "", r["away_periods"] or ""
-        if hp and ap:
-            hs, as_ = hp.split(","), ap.split(",")
-            per_tb = pd.DataFrame([[r["away_abbr"]] + as_ + [int(r["away_pts"])], [r["home_abbr"]] + hs + [int(r["home_pts"])]],
-                                  columns=["球隊"] + [("Q" + str(i + 1)) if i < 4 else ("OT" + ("" if i == 4 else str(i - 3)))
-                                                     for i in range(len(hs))] + ["總分"])
-            per_tb["_key"] = per_tb["球隊"]
-            nice_table(per_tb, num_cols=tuple(per_tb.columns[1:-1]), dot_col="球隊", colors=TEAM_COLORS)
+    with fold("比賽走勢圖與每節比分"):
+        opts = list(f["game_id"])
+        lab = {r["game_id"]: f"{r['away_abbr']} @ {r['home_abbr']}" + ("　★" if i == 0 else "")
+               for i, (_, r) in enumerate(f.iterrows())}
+        gid = pills("選一場比賽（★ 是今天最精彩的一場）", opts, f"pbp_game_{day:%m%d}", default=opts[0],
+                    format_func=lambda g: lab.get(g, g))
+        r = f[f["game_id"] == gid].iloc[0]
+        e = ev[ev["game_id"] == gid].sort_values(["elapsed_sec", "action_number"])
+        if e.empty:
+            st.info("這場的逐回合紀錄還沒載入。")
+        else:
+            x = [0] + list(e["elapsed_sec"] / 60)
+            y = [0] + list(e["score_home"] - e["score_away"])
+            hc, ac = TEAM_COLORS.get(r["home_abbr"], ACCENT), TEAM_COLORS.get(r["away_abbr"], MUTED)
+            hov = ["開賽"] + [f"{period_name(p)} 剩 {int(c // 60)}:{int(c % 60):02d}<br>{n}（{t}）<br>"
+                              f"{r['away_abbr']} {int(sa)} – {int(sh)} {r['home_abbr']}"
+                              for p, c, n, t, sh, sa in zip(e["period"], e["clock_sec"].fillna(0), e["player_name"].fillna(""),
+                                                           e["action_type"], e["score_home"], e["score_away"])]
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=x, y=[max(v, 0) for v in y], mode="lines", line=dict(width=0, shape="hv"),
+                                     fill="tozeroy", fillcolor=hc, opacity=0.35, name=f"{r['home_abbr']} 領先", hoverinfo="skip"))
+            fig.add_trace(go.Scatter(x=x, y=[min(v, 0) for v in y], mode="lines", line=dict(width=0, shape="hv"),
+                                     fill="tozeroy", fillcolor=ac, opacity=0.35, name=f"{r['away_abbr']} 領先", hoverinfo="skip"))
+            fig.add_trace(go.Scatter(x=x, y=y, mode="lines", line=dict(color=INK, width=1.6, shape="hv"), name="分差",
+                                     text=hov, hovertemplate="%{text}<extra></extra>"))
+            n_per = int(e["period"].max())
+            ends = [12, 24, 36, 48] + [48 + 5 * k for k in range(1, max(0, n_per - 4) + 1)]
+            for xe in ends[:-1]:
+                fig.add_vline(x=xe, line=dict(color=MUTED, dash="dot", width=1))
+            fig.add_hline(y=0, line=dict(color=INK_2, width=1))
+            top_y = max(abs(v) for v in y) or 5
+            fig.add_annotation(x=1, y=top_y, xref="paper", xanchor="right", yanchor="top", showarrow=False,
+                               text=f"{r['home_abbr']} 領先 ↑", font=dict(size=11, color=hc))
+            fig.add_annotation(x=1, y=-top_y, xref="paper", xanchor="right", yanchor="bottom", showarrow=False,
+                               text=f"{r['away_abbr']} 領先 ↓", font=dict(size=11, color=ac))
+            fig.update_xaxes(title="比賽時間（分鐘）", tickvals=[0] + ends, range=[0, ends[-1]])
+            fig.update_yaxes(title=f"{r['home_abbr']} − {r['away_abbr']}（分）", range=[-top_y * 1.15, top_y * 1.15])
+            fig.update_layout(showlegend=False)
+            st.plotly_chart(style(fig, 340), width="stretch")
+            hp, ap = r["home_periods"] or "", r["away_periods"] or ""
+            if hp and ap:
+                hs, as_ = hp.split(","), ap.split(",")
+                per_tb = pd.DataFrame([[r["away_abbr"]] + as_ + [int(r["away_pts"])], [r["home_abbr"]] + hs + [int(r["home_pts"])]],
+                                      columns=["球隊"] + [("Q" + str(i + 1)) if i < 4 else ("OT" + ("" if i == 4 else str(i - 3)))
+                                                         for i in range(len(hs))] + ["總分"])
+                per_tb["_key"] = per_tb["球隊"]
+                nice_table(per_tb, num_cols=tuple(per_tb.columns[1:-1]), dot_col="球隊", colors=TEAM_COLORS)
         win = r["home_abbr"] if r["home_pts"] > r["away_pts"] else r["away_abbr"]
         lines = [f"{team_label(r['away_abbr'])} @ {team_label(r['home_abbr'])}：領先互換 {int(r['lead_changes'])} 次、"
                  f"平手 {int(r['times_tied'])} 次" + ("，是一場關鍵時刻比賽" if r["clutch_game"] else "") + "。",
@@ -2003,7 +2011,11 @@ def render_pbp(season, day, n_games, top, part):
             "對手": [team_label(next((x for x in opp.get(g_, ("", "")) if x != a), "")) for g_, a in zip(cl["game_id"], cl["team_abbr"])],
             "關鍵得分": cl["pts"].astype(int), "三分": cl["threes"].astype(int), "_key": cl["team_abbr"],
             "_b": cl["pts"] / cl["pts"].max()}).head(8)
-        nice_table(tb, num_cols=("關鍵得分", "三分"), dot_col="球隊", colors=TEAM_COLORS, bars={"關鍵得分": "_b"})
+        c0 = tb.iloc[0]
+        st.markdown(f'<div class="chart-headline">關鍵先生：{c0["球員"]}（{c0["球隊"]}）最後 5 分鐘拿下 {c0["關鍵得分"]} 分</div>',
+                    unsafe_allow_html=True)
+        with fold(f"關鍵時刻得分榜（前 {len(tb)} 名）"):
+            nice_table(tb, num_cols=("關鍵得分", "三分"), dot_col="球隊", colors=TEAM_COLORS, bars={"關鍵得分": "_b"})
 
 
 if PAGE == "每日戰報":
@@ -2057,6 +2069,8 @@ if PAGE == "每日戰報":
         st.info("尚未載入資料。請先在 Supabase 執行 schema_recap.sql，再在電腦上執行：python load_recap.py")
     else:
         season = tg["season"].iloc[0]
+        seg("頁面區塊", ["全部展開", "全部收起"], "rc_open")
+        st.caption("每個大區塊都可以點標題收起來；收起來時，區塊上方的一句話結論還是看得到。")
         render_predictions(tg, season)
         st.divider()
         section("比賽結果", "選一個比賽日，看比分、值得關注的球員、球隊隱憂與戰績榜")
@@ -2112,9 +2126,10 @@ if PAGE == "每日戰報":
   <div class="rc-score {'rc-win' if home['wl'] == 'W' else 'rc-lose'}">{int(home["pts"])}</div>
   <div class="rc-team">{badge(home["abbreviation"])}<div class="rc-rec">{record_through(tg, home["abbreviation"], day)}</div></div>
 </div>{star_html}</div>''')
-        cols = st.columns(3, gap="medium")
-        for i, c in enumerate(cards):
-            cols[i % 3].markdown(c, unsafe_allow_html=True)
+        with fold(f"{len(cards)} 場比分卡"):
+            cols = st.columns(3, gap="medium")
+            for i, c in enumerate(cards):
+                cols[i % 3].markdown(c, unsafe_allow_html=True)
 
         render_pbp(season, day, games.ngroups, top, "flow")        # 比賽走勢＋關鍵時刻（逐回合紀錄）
 
@@ -2131,7 +2146,8 @@ if PAGE == "每日戰報":
 <div><div class="nm">{r["player_name"]}</div><div class="sub">{team_label(r["abbreviation"])}・{r["matchup"]}・{"勝" if r["wl"] == "W" else "敗"}</div></div></div>
 <div class="line">{stat_line(pd.Series(r))}　<span style="color:var(--muted);font-size:0.78rem">{base}</span></div>
 <div>{"".join(f'<span class="rc-tag">{t}</span>' for t in r["tags"])}</div></div>''')
-            st.markdown(f'<div class="rc-hero">{"".join(html)}</div>', unsafe_allow_html=True)
+            with fold(f"{len(html)} 位值得關注的球員"):
+                st.markdown(f'<div class="rc-hero">{"".join(html)}</div>', unsafe_allow_html=True)
 
         # ---- 3. 球隊隱憂 ----
         section("球隊隱憂", "比較每隊「最近 5 場」和「本季平均」：防守、三分、失誤、淨勝分變差，或連敗、主力未出賽、得分手低迷")
@@ -2160,25 +2176,26 @@ if PAGE == "每日戰報":
         if not cc:
             st.caption("目前沒有明顯的隱憂。")
         else:
-            concern_cards(cc[:10])
-            if len(cc) > 10:
-                with st.expander(f"展開其餘 {len(cc) - 10} 隊"):
+            with fold(f"{len(cc)} 隊的隱憂"):           # 框裡面不能再放框，所以「其餘幾隊」改用開關
+                concern_cards(cc[:10])
+                if len(cc) > 10 and st.toggle(f"顯示其餘 {len(cc) - 10} 隊", key="rc_cc_more"):
                     concern_cards(cc[10:])
         if calm:
             st.caption("目前沒有隱憂：" + "、".join(team_label(a_) for a_ in calm))
 
         # ---- 4. 戰績榜 ----
         section("戰績榜", f"{season} 例行賽，到 {day:%m/%d} 為止；勝差以各區第一名為準")
-        left, right = st.columns(2, gap="large")
-        for col, conf in [(left, "東區"), (right, "西區")]:
-            with col:
-                st.markdown(f"**{conf}**")
-                tb = standings(tg, day, conf)
-                if tb.empty:
-                    st.caption("還沒有比賽。")
-                else:
-                    nice_table(tb, num_cols=("#", "勝", "敗", "勝率", "勝差", "場均淨勝"),
-                               signed_cols=("場均淨勝",), dot_col="球隊", colors=TEAM_COLORS)
+        with fold("東區、西區戰績榜"):
+            left, right = st.columns(2, gap="large")
+            for col, conf in [(left, "東區"), (right, "西區")]:
+                with col:
+                    st.markdown(f"**{conf}**")
+                    tb = standings(tg, day, conf)
+                    if tb.empty:
+                        st.caption("還沒有比賽。")
+                    else:
+                        nice_table(tb, num_cols=("#", "勝", "敗", "勝率", "勝差", "場均淨勝"),
+                                   signed_cols=("場均淨勝",), dot_col="球隊", colors=TEAM_COLORS)
 
         with st.expander("資料來源與方法"):
             st.markdown("""
