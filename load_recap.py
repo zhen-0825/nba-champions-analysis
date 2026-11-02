@@ -16,6 +16,7 @@
 
 import argparse
 import time
+import warnings
 from datetime import date
 
 import pandas as pd
@@ -149,8 +150,40 @@ def schedule_from_season(season):
                          "status": df[status] if status else None})
 
 
+def _find_games(obj):
+    """在 NBA 回傳的資料裡找出「games」那一串（不同版本放的位置不一樣）"""
+    if isinstance(obj, dict):
+        if isinstance(obj.get("games"), list):
+            return obj["games"]
+        for v in obj.values():
+            g = _find_games(v)
+            if g is not None:
+                return g
+    return None
+
+
+def schedule_from_scoreboard_v3(days):
+    """方法二：一天一天問「這天有哪些比賽」（ScoreboardV3，NBA 建議取代 V2 的新版）"""
+    from nba_api.stats.endpoints import scoreboardv3
+
+    rows = []
+    for d in days:
+        time.sleep(REQUEST_DELAY)
+        data = scoreboardv3.ScoreboardV3(game_date=d.strftime("%Y-%m-%d"), league_id="00", timeout=TIMEOUT).get_dict()
+        for g in _find_games(data) or []:
+            rows.append({"game_id": str(g.get("gameId")).zfill(10), "game_date": pd.Timestamp(d),
+                         "home_team_id": (g.get("homeTeam") or {}).get("teamId"),
+                         "away_team_id": (g.get("awayTeam") or {}).get("teamId"),
+                         "status": g.get("gameStatusText")})
+    df = pd.DataFrame(rows, columns=["game_id", "game_date", "home_team_id", "away_team_id", "status"])
+    df["home_team_id"] = pd.to_numeric(df["home_team_id"], errors="coerce")
+    df["away_team_id"] = pd.to_numeric(df["away_team_id"], errors="coerce")
+    return df
+
+
 def schedule_from_scoreboard(days):
-    """方法二（備案）：一天一天問「這天有哪些比賽」（ScoreboardV2）"""
+    """方法四（最後備案）：一天一天問「這天有哪些比賽」（ScoreboardV2）"""
+    warnings.filterwarnings("ignore", category=DeprecationWarning)   # V2 的過時警告很長，不顯示
     from nba_api.stats.endpoints import scoreboardv2
 
     rows = []
@@ -170,8 +203,9 @@ def load_schedule(client, season):
     days = [start + pd.Timedelta(days=i) for i in range(SCHEDULE_DAYS + 1)]
     print(f"  賽程 {days[0]:%m/%d}～{days[-1]:%m/%d}")
     sched = None
-    for name, fn in [("NBA 官網賽程檔", schedule_from_cdn), ("整季賽程表", lambda: schedule_from_season(season)),
-                     ("逐日查詢", lambda: schedule_from_scoreboard(days))]:
+    for name, fn in [("NBA 官網賽程檔", schedule_from_cdn), ("逐日查詢（新版 V3）", lambda: schedule_from_scoreboard_v3(days)),
+                     ("整季賽程表", lambda: schedule_from_season(season)),
+                     ("逐日查詢（舊版 V2）", lambda: schedule_from_scoreboard(days))]:
         try:
             got = fn()
             got = got[(got["game_date"] >= days[0]) & (got["game_date"] <= days[-1])]
@@ -184,7 +218,7 @@ def load_schedule(client, season):
         except Exception as e:
             print(f"    {name}讀取失敗（{type(e).__name__}：{str(e)[:120]}），換下一種方法")
     if sched is None:
-        print("    三種方法都失敗，這次先略過賽程（比分資料不受影響）")
+        print("    四種方法都失敗，這次先略過賽程（比分資料不受影響）")
         return
     if sched is None or sched.empty:
         print("    這段期間沒有比賽")
