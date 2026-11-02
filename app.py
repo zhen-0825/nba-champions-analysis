@@ -290,12 +290,14 @@ hr { border-color: var(--line) !important; }
 /* 主要按鈕（紫底白字）：底下一條深紫，像按鍵的側面 */
 [data-testid="stMain"] [data-testid="stBaseButton-primary"] {
   background: var(--brand) !important; color: #ffffff !important; border-color: var(--brand) !important;
-  box-shadow: 0 3px 0 var(--key-edge-brand), var(--lift) !important; }
+  box-shadow: 0 2px 0 rgba(76,29,149,0.45), 0 4px 10px -8px rgba(40,24,80,0.4) !important; }
 [data-testid="stMain"] [data-testid="stBaseButton-primary"] p { color: #ffffff !important; }
 [data-testid="stMain"] [data-testid="stBaseButton-primary"]:hover { background: #6d28d9 !important;
-  box-shadow: 0 4px 0 var(--key-edge-brand), 0 8px 16px -10px rgba(40,24,80,0.5) !important; }
-[data-testid="stMain"] [data-testid="stBaseButton-primary"]:active { transform: translateY(3px);
-  box-shadow: 0 0 0 var(--key-edge-brand) !important; }
+  box-shadow: 0 2px 0 rgba(76,29,149,0.5), 0 6px 12px -8px rgba(40,24,80,0.45) !important; }
+[data-testid="stMain"] [data-testid="stBaseButton-primary"]:active { transform: translateY(2px);
+  box-shadow: 0 0 0 rgba(76,29,149,0) !important; }
+/* 首頁「本週發現」下面的按鈕：和卡片拉開一點距離 */
+.st-key-feat_go { margin-top: 14px; }
 /* 文字型按鈕（首頁重點發現的「前往 →」）維持平的，像連結 */
 [data-testid="stMain"] [data-testid="stBaseButton-tertiary"] {
   background: transparent !important; border: none !important; box-shadow: none !important; color: var(--brand) !important; }
