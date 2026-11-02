@@ -1818,6 +1818,192 @@ def render_predictions(tg, season):
 """)
 
 
+# ---------- 每日戰報：逐回合紀錄（比賽走勢、關鍵時刻、今日戰報稿）----------
+@st.cache_data(ttl=900, show_spinner="讀取比賽走勢中…")
+def load_pbp_flow(season, day):
+    """某一天所有比賽的走勢摘要（pbp_game_flow，一場一筆）"""
+    return _read_filtered("pbp_game_flow", [("eq", "season", season), ("eq", "game_date", day)], ["game_id"])
+
+
+@st.cache_data(ttl=900, show_spinner="讀取逐回合得分中…")
+def load_pbp_events(season, day):
+    """某一天所有比賽的每一次得分（一場約 120 筆）"""
+    df = _read_filtered("pbp_events", [("eq", "season", season), ("eq", "game_date", day)],
+                        ["game_id", "action_number"])
+    for c in ["period", "clock_sec", "elapsed_sec", "points", "score_home", "score_away"]:
+        if c in df:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df
+
+
+def period_name(p):
+    p = int(p or 0)
+    return f"第 {p} 節" if p <= 4 else ("延長賽" if p == 5 else f"第 {p - 4} 次延長")
+
+
+def drama(r):
+    """這場有多精彩：領先互換＋平手＋關鍵時刻＋逆轉，數字越大越值得看"""
+    return (int(r["lead_changes"] or 0) + int(r["times_tied"] or 0) * 0.5
+            + (8 if r["clutch_game"] else 0) + int(r["comeback_pts"] or 0) * 0.4
+            - abs(int(r["home_pts"] or 0) - int(r["away_pts"] or 0)) * 0.3)
+
+
+def clutch_leaders(ev):
+    """關鍵時刻（第四節或延長賽最後 5 分鐘、分差 5 分以內）誰得最多分"""
+    if ev.empty or "is_clutch" not in ev:
+        return pd.DataFrame()
+    c = ev[ev["is_clutch"].astype(bool)]
+    if c.empty:
+        return pd.DataFrame()
+    g = (c.groupby(["player_name", "team_abbr", "game_id"])
+         .agg(pts=("points", "sum"), threes=("action_type", lambda s: int((s == "3PT").sum())),
+              shots=("points", "size")).reset_index())
+    return g.sort_values(["pts", "threes"], ascending=False)
+
+
+def recap_script(day, n_games, flow, ev, top):
+    """今日戰報稿：把當天的重點寫成一段可以直接念的稿子（YouTuber 開場風格），每一句都由資料算出來"""
+    out = [f"大家好，歡迎收看 {day:%m/%d}（美國時間）的 NBA 每日戰報！這個比賽日一共有 {n_games} 場比賽。"]
+    if not flow.empty:
+        f = flow.copy()
+        f["drama"] = [drama(r) for _, r in f.iterrows()]
+        b = f.sort_values("drama").iloc[-1]
+        win, lose = ((b["home_abbr"], b["away_abbr"]) if b["home_pts"] > b["away_pts"] else (b["away_abbr"], b["home_abbr"]))
+        hi, lo = max(b["home_pts"], b["away_pts"]), min(b["home_pts"], b["away_pts"])
+        out.append(f"今天最精彩的一場是 {team_label(b['away_abbr'])} 作客 {team_label(b['home_abbr'])}："
+                   f"雙方領先互換 {int(b['lead_changes'])} 次、平手 {int(b['times_tied'])} 次"
+                   + ("，最後 5 分鐘分差都還在 5 分以內" if b["clutch_game"] else "")
+                   + f"，最後由 {team_label(win)} 以 {int(hi)} 比 {int(lo)} 拿下 {team_label(lose)}。")
+        cb = f.sort_values("comeback_pts").iloc[-1]
+        if int(cb["comeback_pts"] or 0) >= 10:
+            loser = cb["away_abbr"] if cb["comeback_team"] == cb["home_abbr"] else cb["home_abbr"]
+            out.append(f"最大逆轉：{team_label(cb['comeback_team'])} 一度落後 {int(cb['comeback_pts'])} 分，"
+                       f"最後反過來擊敗 {team_label(loser)}。")
+        run_ = f.sort_values("best_run_pts").iloc[-1]
+        if int(run_["best_run_pts"] or 0) >= 10:
+            out.append(f"最猛的一波攻勢：{team_label(run_['best_run_team'])} 在{period_name(run_['best_run_period'])}"
+                       f"打出一波 {int(run_['best_run_pts'])} 比 0。")
+        blow = f.assign(m=(f["home_pts"] - f["away_pts"]).abs()).sort_values("m").iloc[-1]
+        if int(blow["m"]) >= 20:
+            w_ = blow["home_abbr"] if blow["home_pts"] > blow["away_pts"] else blow["away_abbr"]
+            out.append(f"分差最大的是 {team_label(w_)}，狂勝 {int(blow['m'])} 分。")
+    if top is not None:
+        out.append(f"今日最佳球員：{top.player_name}（{team_label(top.abbreviation)}）"
+                   f"{int(top.pts)} 分、{int(top.reb)} 籃板、{int(top.ast)} 助攻。")
+    cl = clutch_leaders(ev)
+    if not cl.empty and int(cl.iloc[0]["pts"]) >= 4:
+        c0 = cl.iloc[0]
+        out.append(f"關鍵先生：{c0['player_name']}（{team_label(c0['team_abbr'])}）在最後 5 分鐘的膠著時刻拿下 {int(c0['pts'])} 分"
+                   + (f"，其中 {int(c0['threes'])} 記三分。" if int(c0["threes"]) else "。"))
+    out.append("以上就是今天的戰報，我們明天見！")
+    return out
+
+
+def render_pbp(season, day, n_games, top, part):
+    """每日戰報裡的三個區塊：part="script" 只畫今日戰報稿（放在最上面）；part="flow" 畫比賽走勢＋關鍵時刻"""
+    status = table_status("pbp_game_flow")
+    flow = load_pbp_flow(season, day.strftime("%Y-%m-%d")) if status == "ok" else pd.DataFrame()
+    ev = load_pbp_events(season, day.strftime("%Y-%m-%d")) if not flow.empty else pd.DataFrame()
+    for c in ["home_pts", "away_pts", "lead_changes", "times_tied", "home_max_lead", "away_max_lead",
+              "comeback_pts", "best_run_pts", "best_run_period"]:
+        if c in flow:
+            flow[c] = pd.to_numeric(flow[c], errors="coerce").fillna(0)
+
+    # ---- 今日戰報稿 ----
+    if part == "script":
+        section("今日戰報稿", "把這一天的重點寫成一段可以直接念、直接貼的稿子；每一句都是由資料自動算出來的")
+        script = recap_script(day, n_games, flow, ev, top)
+        st.markdown('<div class="hypo" style="line-height:2">' + "<br>".join(script) + "</div>", unsafe_allow_html=True)
+        with st.expander("複製文字稿"):
+            st.code("\n".join(script), language=None)
+        if flow.empty:
+            st.caption("最精彩的一場、最大逆轉、關鍵先生需要逐回合紀錄："
+                       + ("請先在 Supabase SQL Editor 執行 schema_pbp.sql，再執行 python load_pbp.py --all"
+                          if status == "missing" else "尚未載入資料，請執行 python load_pbp.py --all"))
+        return
+    if flow.empty:
+        section("比賽走勢", "")
+        st.info("尚未載入資料，請執行 python load_pbp.py --all"
+                + ("（第一次要先在 Supabase SQL Editor 執行 schema_pbp.sql）" if status == "missing" else ""))
+        return
+
+    # ---- 比賽走勢 ----
+    slot = section("比賽走勢", "線在 0 上面＝主隊領先、下面＝客隊領先；顏色是領先那一隊的球衣色，虛線是每一節的分界")
+    f = flow.copy()
+    f["drama"] = [drama(r) for _, r in f.iterrows()]
+    f = f.sort_values("drama", ascending=False)
+    opts = list(f["game_id"])
+    lab = {r["game_id"]: f"{r['away_abbr']} @ {r['home_abbr']}" + ("　★" if i == 0 else "")
+           for i, (_, r) in enumerate(f.iterrows())}
+    gid = pills("選一場比賽（★ 是今天最精彩的一場）", opts, f"pbp_game_{day:%m%d}", default=opts[0],
+                format_func=lambda g: lab.get(g, g))
+    r = f[f["game_id"] == gid].iloc[0]
+    e = ev[ev["game_id"] == gid].sort_values(["elapsed_sec", "action_number"])
+    if e.empty:
+        st.info("這場的逐回合紀錄還沒載入。")
+    else:
+        x = [0] + list(e["elapsed_sec"] / 60)
+        y = [0] + list(e["score_home"] - e["score_away"])
+        hc, ac = TEAM_COLORS.get(r["home_abbr"], ACCENT), TEAM_COLORS.get(r["away_abbr"], MUTED)
+        hov = ["開賽"] + [f"{period_name(p)} 剩 {int(c // 60)}:{int(c % 60):02d}<br>{n}（{t}）<br>"
+                          f"{r['away_abbr']} {int(sa)} – {int(sh)} {r['home_abbr']}"
+                          for p, c, n, t, sh, sa in zip(e["period"], e["clock_sec"].fillna(0), e["player_name"].fillna(""),
+                                                       e["action_type"], e["score_home"], e["score_away"])]
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=x, y=[max(v, 0) for v in y], mode="lines", line=dict(width=0, shape="hv"),
+                                 fill="tozeroy", fillcolor=hc, opacity=0.35, name=f"{r['home_abbr']} 領先", hoverinfo="skip"))
+        fig.add_trace(go.Scatter(x=x, y=[min(v, 0) for v in y], mode="lines", line=dict(width=0, shape="hv"),
+                                 fill="tozeroy", fillcolor=ac, opacity=0.35, name=f"{r['away_abbr']} 領先", hoverinfo="skip"))
+        fig.add_trace(go.Scatter(x=x, y=y, mode="lines", line=dict(color=INK, width=1.6, shape="hv"), name="分差",
+                                 text=hov, hovertemplate="%{text}<extra></extra>"))
+        n_per = int(e["period"].max())
+        ends = [12, 24, 36, 48] + [48 + 5 * k for k in range(1, max(0, n_per - 4) + 1)]
+        for xe in ends[:-1]:
+            fig.add_vline(x=xe, line=dict(color=MUTED, dash="dot", width=1))
+        fig.add_hline(y=0, line=dict(color=INK_2, width=1))
+        top_y = max(abs(v) for v in y) or 5
+        fig.add_annotation(x=1, y=top_y, xref="paper", xanchor="right", yanchor="top", showarrow=False,
+                           text=f"{r['home_abbr']} 領先 ↑", font=dict(size=11, color=hc))
+        fig.add_annotation(x=1, y=-top_y, xref="paper", xanchor="right", yanchor="bottom", showarrow=False,
+                           text=f"{r['away_abbr']} 領先 ↓", font=dict(size=11, color=ac))
+        fig.update_xaxes(title="比賽時間（分鐘）", tickvals=[0] + ends, range=[0, ends[-1]])
+        fig.update_yaxes(title=f"{r['home_abbr']} − {r['away_abbr']}（分）", range=[-top_y * 1.15, top_y * 1.15])
+        fig.update_layout(showlegend=False)
+        st.plotly_chart(style(fig, 340), width="stretch")
+        hp, ap = r["home_periods"] or "", r["away_periods"] or ""
+        if hp and ap:
+            hs, as_ = hp.split(","), ap.split(",")
+            per_tb = pd.DataFrame([[r["away_abbr"]] + as_ + [int(r["away_pts"])], [r["home_abbr"]] + hs + [int(r["home_pts"])]],
+                                  columns=["球隊"] + [("Q" + str(i + 1)) if i < 4 else ("OT" + ("" if i == 4 else str(i - 3)))
+                                                     for i in range(len(hs))] + ["總分"])
+            per_tb["_key"] = per_tb["球隊"]
+            nice_table(per_tb, num_cols=tuple(per_tb.columns[1:-1]), dot_col="球隊", colors=TEAM_COLORS)
+        win = r["home_abbr"] if r["home_pts"] > r["away_pts"] else r["away_abbr"]
+        lines = [f"{team_label(r['away_abbr'])} @ {team_label(r['home_abbr'])}：領先互換 {int(r['lead_changes'])} 次、"
+                 f"平手 {int(r['times_tied'])} 次" + ("，是一場關鍵時刻比賽" if r["clutch_game"] else "") + "。",
+                 f"{r['home_abbr']} 最多領先 {int(r['home_max_lead'])} 分，{r['away_abbr']} 最多領先 {int(r['away_max_lead'])} 分；"
+                 + (f"{team_label(win)} 一度落後 {int(r['comeback_pts'])} 分還是贏了。" if int(r["comeback_pts"]) > 0
+                    else f"{team_label(win)} 一路沒有落後。"),
+                 f"最長的連續得分：{team_label(r['best_run_team'])} 在{period_name(r['best_run_period'])}打出 {int(r['best_run_pts'])} 比 0。"]
+        if str(r.get("score_check")).lower() in ("false", "0"):
+            lines.append("注意：這場逐回合加總的比分和官方比分不同，走勢圖可能少了幾球，參考就好。")
+        insight(lines, where=slot, label="發現", to_summary=False)
+
+    # ---- 關鍵時刻 ----
+    section("關鍵時刻", "第四節或延長賽最後 5 分鐘、進球前分差 5 分以內的得分；這個時候得分最難，也最決定勝負")
+    cl = clutch_leaders(ev)
+    if cl.empty:
+        st.caption("這一天沒有關鍵時刻比賽（最後 5 分鐘分差都超過 5 分）。")
+    else:
+        opp = {g_: (rr["home_abbr"], rr["away_abbr"]) for g_, rr in flow.set_index("game_id").iterrows()}
+        tb = pd.DataFrame({
+            "球員": cl["player_name"], "球隊": [team_label(a) for a in cl["team_abbr"]],
+            "對手": [team_label(next((x for x in opp.get(g_, ("", "")) if x != a), "")) for g_, a in zip(cl["game_id"], cl["team_abbr"])],
+            "關鍵得分": cl["pts"].astype(int), "三分": cl["threes"].astype(int), "_key": cl["team_abbr"],
+            "_b": cl["pts"] / cl["pts"].max()}).head(8)
+        nice_table(tb, num_cols=("關鍵得分", "三分"), dot_col="球隊", colors=TEAM_COLORS, bars={"關鍵得分": "_b"})
+
+
 if PAGE == "每日戰報":
     st.markdown("""
 <style>
@@ -1898,6 +2084,7 @@ if PAGE == "每日戰報":
             lines.append(f"今日最佳：<b>{top.player_name}</b>（{team_label(top.abbreviation)}）"
                          f" {int(top.pts)} 分 {int(top.reb)} 籃板 {int(top.ast)} 助攻。")
         insight(lines)
+        render_pbp(season, day, games.ngroups, top, "script")      # 今日戰報稿（逐回合紀錄）
 
         # ---- 1. 比分卡：一場一張，像 NBA 官方圖卡 ----
         section("比分", "左邊客隊、右邊主隊；下方是這場表現最好的球員（綜合得分、籃板、助攻、效率）")
@@ -1926,6 +2113,8 @@ if PAGE == "每日戰報":
         cols = st.columns(3, gap="medium")
         for i, c in enumerate(cards):
             cols[i % 3].markdown(c, unsafe_allow_html=True)
+
+        render_pbp(season, day, games.ngroups, top, "flow")        # 比賽走勢＋關鍵時刻（逐回合紀錄）
 
         # ---- 2. 值得關注的球員 ----
         section("值得關注的球員", "每位都寫出被選上的原因：爆發、大三元、三分雨、高效率、比自己平常多很多…")
@@ -1995,6 +2184,7 @@ if PAGE == "每日戰報":
 - **每場最佳球員**：用 Game Score（得分＋命中＋籃板＋助攻＋抄截＋阻攻，扣掉投失、失誤、犯規）挑出綜合表現最好的人。
 - **值得關注**：40 分以上、30 分以上、大三元、單場 7 記三分以上、真實命中率 70% 以上（至少 12 次出手）、比自己本季平常多 12 分以上（平常不到 12 分的標「超常發揮」：角色球員今天跳出來）、抄截＋阻攻 6 次以上。
 - **球隊隱憂**：3 連敗以上；打滿 6 場後，比較最近 5 場和本季平均：失分多 6 分以上、三分命中率低 4 個百分點以上、失誤多 2.5 次以上、淨勝分少 8 分以上；本季上場時間最多的球員上一場沒有出賽；本季得分最多的球員近 3 場得分不到平常的 7 成。
+- **今日戰報稿、比賽走勢、關鍵時刻**：NBA 官方逐回合紀錄 PlayByPlayV3，由 `load_pbp.py` 每天補最近 3 天的比賽，只存「得分的那一刻」進 `pbp_events`，並替每場算好走勢摘要存進 `pbp_game_flow`（領先互換、平手、最大領先、最大逆轉、最長連續得分）。比分是從 0 開始自己累加；和官方比分不同的場次會標示。關鍵時刻＝第四節或延長賽最後 5 分鐘、進球前分差 5 分以內。「最精彩的一場」用領先互換、平手、關鍵時刻、逆轉幅度加總，扣掉最終分差。
 - **沒有的資料**：官方傷兵名單與原因、NBA 盃分組戰績（沒有分組資料），所以「未出賽」只說明沒有上場，不代表一定受傷。
 """)
 
