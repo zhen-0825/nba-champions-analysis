@@ -1870,45 +1870,74 @@ def clutch_leaders(ev):
     return g.sort_values(["pts", "threes"], ascending=False)
 
 
-def recap_script(day, n_games, flow, ev, top):
-    """今日戰報稿：把當天的重點寫成一段可以直接念的稿子（YouTuber 開場風格），每一句都由資料算出來"""
-    out = [f"大家好，歡迎收看 {day:%m/%d}（美國時間）的 NBA 每日戰報！這個比賽日一共有 {n_games} 場比賽。"]
+def recap_script(day, n_games, flow, ev, top, recs=None):
+    """今日戰報稿：只講重點，一行一件事，每一句都由資料算出來"""
+    zh = lambda a_: ALL_ZH.get(a_, a_)                       # noqa: E731
+    out = [f"{day:%m/%d}（美國時間）{n_games} 場比賽"]
     if not flow.empty:
         f = flow.copy()
         f["drama"] = [drama(r) for _, r in f.iterrows()]
         b = f.sort_values("drama").iloc[-1]
-        win, lose = ((b["home_abbr"], b["away_abbr"]) if b["home_pts"] > b["away_pts"] else (b["away_abbr"], b["home_abbr"]))
-        hi, lo = max(b["home_pts"], b["away_pts"]), min(b["home_pts"], b["away_pts"])
-        out.append(f"今天最精彩的一場是 {team_label(b['away_abbr'])} 作客 {team_label(b['home_abbr'])}："
-                   f"雙方領先互換 {int(b['lead_changes'])} 次、平手 {int(b['times_tied'])} 次"
-                   + ("，最後 5 分鐘分差都還在 5 分以內" if b["clutch_game"] else "")
-                   + f"，最後由 {team_label(win)} 以 {int(hi)} 比 {int(lo)} 拿下 {team_label(lose)}。")
+        hw = b["home_pts"] > b["away_pts"]
+        w, l_ = (b["home_abbr"], b["away_abbr"]) if hw else (b["away_abbr"], b["home_abbr"])
+        out.append(f"精選對戰：{zh(w)} {int(max(b['home_pts'], b['away_pts']))}–{int(min(b['home_pts'], b['away_pts']))} {zh(l_)}，"
+                   f"領先互換 {int(b['lead_changes'])} 次、平手 {int(b['times_tied'])} 次"
+                   + ("，最後 5 分鐘仍在 5 分差內" if b["clutch_game"] else ""))
         cb = f.sort_values("comeback_pts").iloc[-1]
         if int(cb["comeback_pts"] or 0) >= 10:
             loser = cb["away_abbr"] if cb["comeback_team"] == cb["home_abbr"] else cb["home_abbr"]
-            out.append(f"最大逆轉：{team_label(cb['comeback_team'])} 一度落後 {int(cb['comeback_pts'])} 分，"
-                       f"最後反過來擊敗 {team_label(loser)}。")
+            out.append(f"逆轉勝：{zh(cb['comeback_team'])} 落後 {int(cb['comeback_pts'])} 分逆轉 {zh(loser)}")
         run_ = f.sort_values("best_run_pts").iloc[-1]
         if int(run_["best_run_pts"] or 0) >= 10:
-            out.append(f"最猛的一波攻勢：{team_label(run_['best_run_team'])} 在{period_name(run_['best_run_period'])}"
-                       f"打出一波 {int(run_['best_run_pts'])} 比 0。")
+            out.append(f"攻勢亮點：{zh(run_['best_run_team'])} {period_name(run_['best_run_period'])} {int(run_['best_run_pts'])}–0")
         blow = f.assign(m=(f["home_pts"] - f["away_pts"]).abs()).sort_values("m").iloc[-1]
         if int(blow["m"]) >= 20:
             w_ = blow["home_abbr"] if blow["home_pts"] > blow["away_pts"] else blow["away_abbr"]
-            out.append(f"分差最大的是 {team_label(w_)}，狂勝 {int(blow['m'])} 分。")
+            out.append(f"大勝：{zh(w_)} 贏 {int(blow['m'])} 分")
     if top is not None:
-        out.append(f"今日最佳球員：{top.player_name}（{team_label(top.abbreviation)}）"
-                   f"{int(top.pts)} 分、{int(top.reb)} 籃板、{int(top.ast)} 助攻。")
+        out.append(f"最佳球員：{top.player_name}（{zh(top.abbreviation)}）{int(top.pts)} 分 {int(top.reb)} 籃板 {int(top.ast)} 助攻")
     cl = clutch_leaders(ev)
     if not cl.empty and int(cl.iloc[0]["pts"]) >= 4:
         c0 = cl.iloc[0]
-        out.append(f"關鍵先生：{c0['player_name']}（{team_label(c0['team_abbr'])}）在最後 5 分鐘的膠著時刻拿下 {int(c0['pts'])} 分"
-                   + (f"，其中 {int(c0['threes'])} 記三分。" if int(c0["threes"]) else "。"))
-    out.append("以上就是今天的戰報，我們明天見！")
+        out.append(f"關鍵先生：{c0['player_name']}（{zh(c0['team_abbr'])}）最後 5 分鐘 {int(c0['pts'])} 分"
+                   + (f"（{int(c0['threes'])} 記三分）" if int(c0["threes"]) else ""))
+    for name_, why in (recs or []):
+        out.append(f"推薦球員：{name_}，{why}")
     return out
 
 
-def render_pbp(season, day, n_games, top, part):
+def recommend_players(day_pl, pl, sa, day, top, n=2):
+    """推薦球員：①今天值得關注（扣掉最佳球員）②近況火熱（最近 5 場平均比本季平常多 5 分以上）。回傳 [(名字, 原因)]"""
+    zh = lambda a_: ALL_ZH.get(a_, a_)                       # noqa: E731
+    skip = {getattr(top, "player_id", None)}
+    out = []
+    so = standouts(day_pl, sa) if not day_pl.empty else []
+    for r in so:
+        if r.get("player_id") in skip:
+            continue
+        out.append((f"{r['player_name']}（{zh(r['abbreviation'])}）", "今天 " + "、".join(r["tags"][:2])))
+        skip.add(r.get("player_id"))
+        break
+    if not pl.empty and not sa.empty:
+        recent = pl[pl["game_date"] <= day].sort_values("game_date")
+        last5 = recent.groupby(["player_id", "team_id"]).tail(5)
+        g = last5.groupby(["player_id", "team_id"]).agg(n=("pts", "size"), pts5=("pts", "mean"),
+                                                         name=("player_name", "last"), abbr=("abbreviation", "last"))
+        a = sa.set_index(["player_id", "team_id"])[["gp", "pts"]].apply(pd.to_numeric, errors="coerce")
+        g = g.join(a.rename(columns={"pts": "pts_all"}), how="inner")
+        g = g[(g["n"] >= 4) & (g["gp"] >= 6)]
+        g["base"] = (g["pts_all"] - g["pts5"] * g["n"]) / (g["gp"] - g["n"]).where(g["gp"] > g["n"])
+        g["up"] = g["pts5"] - g["base"]
+        g = g[(g["up"] >= 5) & (g["pts5"] >= 15)].sort_values("up", ascending=False)
+        for (pid, _), r in g.iterrows():
+            if pid in skip or len(out) >= n:
+                continue
+            out.append((f"{r['name']}（{zh(r['abbr'])}）",
+                        f"近 {int(r['n'])} 場平均 {r['pts5']:.1f} 分，比之前多 {r['up']:.1f} 分"))
+            skip.add(pid)
+    return out[:n]
+
+def render_pbp(season, day, n_games, top, part, recs=None):
     """每日戰報裡的三個區塊：part="script" 只畫今日戰報稿（放在最上面）；part="flow" 畫比賽走勢＋關鍵時刻"""
     status = table_status("pbp_game_flow")
     flow = load_pbp_flow(season, day.strftime("%Y-%m-%d")) if status == "ok" else pd.DataFrame()
@@ -1920,8 +1949,8 @@ def render_pbp(season, day, n_games, top, part):
 
     # ---- 今日戰報稿 ----
     if part == "script":
-        section("今日戰報稿", "把這一天的重點寫成一段可以直接念、直接貼的稿子；每一句都是由資料自動算出來的")
-        script = recap_script(day, n_games, flow, ev, top)
+        section("今日戰報稿", "這一天的重點，一行一件事；每一句都由資料自動算出來，可以直接複製")
+        script = recap_script(day, n_games, flow, ev, top, recs)
         st.markdown('<div class="hypo" style="line-height:2">' + "<br>".join(script) + "</div>", unsafe_allow_html=True)
         with st.expander("複製文字稿"):
             st.code("\n".join(script), language=None)
@@ -2100,7 +2129,8 @@ if PAGE == "每日戰報":
             lines.append(f"今日最佳：<b>{top.player_name}</b>（{team_label(top.abbreviation)}）"
                          f" {int(top.pts)} 分 {int(top.reb)} 籃板 {int(top.ast)} 助攻。")
         insight(lines)
-        render_pbp(season, day, games.ngroups, top, "script")      # 今日戰報稿（逐回合紀錄）
+        recs = recommend_players(day_pl, pl, sa, day, top)
+        render_pbp(season, day, games.ngroups, top, "script", recs)  # 今日戰報稿（逐回合紀錄）
 
         # ---- 1. 比分卡：一場一張，像 NBA 官方圖卡 ----
         section("比分", "左邊客隊、右邊主隊；下方是這場表現最好的球員（綜合得分、籃板、助攻、效率）")
