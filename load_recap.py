@@ -106,6 +106,30 @@ def find_col(df, *names):
     return None
 
 
+SCHEDULE_CDN = "https://cdn.nba.com/static/json/staticData/scheduleLeagueV2.json"
+
+
+def schedule_from_cdn():
+    """方法零（最穩）：NBA 官網賽程頁用的公開 JSON 檔，一次拿回整季賽程（不用經過 nba_api）"""
+    import requests
+
+    r = requests.get(SCHEDULE_CDN, timeout=TIMEOUT, headers={"User-Agent": "Mozilla/5.0", "Referer": "https://www.nba.com/"})
+    r.raise_for_status()
+    rows = []
+    for gd in r.json()["leagueSchedule"]["gameDates"]:
+        for g in gd.get("games", []):
+            d = g.get("gameDateEst") or gd.get("gameDate")
+            rows.append({"game_id": str(g["gameId"]).zfill(10),
+                         "game_date": pd.to_datetime(str(d)[:10], errors="coerce"),
+                         "home_team_id": (g.get("homeTeam") or {}).get("teamId"),
+                         "away_team_id": (g.get("awayTeam") or {}).get("teamId"),
+                         "status": g.get("gameStatusText")})
+    df = pd.DataFrame(rows)
+    df["home_team_id"] = pd.to_numeric(df["home_team_id"], errors="coerce")
+    df["away_team_id"] = pd.to_numeric(df["away_team_id"], errors="coerce")
+    return df
+
+
 def schedule_from_season(season):
     """方法一：整季賽程表（ScheduleLeagueV2），一次拿回全部比賽"""
     from nba_api.stats.endpoints import scheduleleaguev2
@@ -146,16 +170,22 @@ def load_schedule(client, season):
     days = [start + pd.Timedelta(days=i) for i in range(SCHEDULE_DAYS + 1)]
     print(f"  賽程 {days[0]:%m/%d}～{days[-1]:%m/%d}")
     sched = None
-    try:
-        sched = schedule_from_season(season)
-        sched = sched[(sched["game_date"] >= days[0]) & (sched["game_date"] <= days[-1])]
-    except Exception as e:
-        print(f"    整季賽程表讀取失敗（{type(e).__name__}），改用逐日查詢")
+    for name, fn in [("NBA 官網賽程檔", schedule_from_cdn), ("整季賽程表", lambda: schedule_from_season(season)),
+                     ("逐日查詢", lambda: schedule_from_scoreboard(days))]:
         try:
-            sched = schedule_from_scoreboard(days)
-        except Exception as e2:
-            print(f"    逐日查詢也失敗：{type(e2).__name__}，這次先略過賽程")
-            return
+            got = fn()
+            got = got[(got["game_date"] >= days[0]) & (got["game_date"] <= days[-1])]
+            if got.empty:
+                print(f"    {name}：這段期間沒有比賽，換下一種方法")
+                continue
+            print(f"    {name}：讀到 {len(got)} 場")
+            sched = got
+            break
+        except Exception as e:
+            print(f"    {name}讀取失敗（{type(e).__name__}：{str(e)[:120]}），換下一種方法")
+    if sched is None:
+        print("    三種方法都失敗，這次先略過賽程（比分資料不受影響）")
+        return
     if sched is None or sched.empty:
         print("    這段期間沒有比賽")
         return
