@@ -1173,6 +1173,12 @@ TERMS = {
     "球星（本頁）": ("這一季例行賽場均得分隊內前 3 名、出賽至少 40 場的球員；第 1 名叫「頭號球星」", "依例行賽場均得分排名"),
     "每 36 分鐘得分": ("把上場時間換算成同樣 36 分鐘時能得幾分，排除「上場比較久所以得比較多」", "得分 ÷ 上場分鐘 × 36"),
     "季後賽 − 例行賽": ("同一位球員、同一季，季後賽數字減例行賽數字；正數＝季後賽比較好", "命中率的差用「百分點」：50% → 47% 是 −3 百分點"),
+    "每場跑動距離": ("球員追蹤攝影機記錄的距離；球隊是全隊在場球員合計的每場平均", "NBA 官方追蹤數據，英里 × 1.609 換成公里"),
+    "平均速度": ("在場上所有時間的平均移動速度，包含走路和站著，所以比衝刺慢很多", "跑動距離 ÷ 在場時間"),
+    "進攻速度／防守速度": ("自己隊進攻時、防守時各自的平均速度；表格裡是聯盟排名（1＝最快）", "分進攻、防守時間計算"),
+    "比同季聯盟平均多多少": ("這隊減掉同一季 30 隊的平均。不同年代打法不同，和同季比才公平", "這隊數值 − 同季 30 隊平均"),
+    "每 36 分鐘跑動": ("把上場時間換算成同樣 36 分鐘，替補和先發才能公平比", "每場距離 ÷ 場均分鐘 × 36"),
+    "相關係數 r": ("兩件事一起變大或變小的程度，−1～+1；0 代表沒關係", "|r| < 0.1 幾乎沒有、0.3 中等、0.5 以上強"),
     "陣容戰績": ("這 5 人「有同時上場過」的那些比賽的勝負，不代表他們打滿全場", "例：8 勝 2 敗＝10 場裡有同時上場"),
 }
 
@@ -3992,7 +3998,7 @@ if PAGE == "跑動距離":
         st.info("尚未載入資料，請執行 python load_extra.py --only tracking"
                 + ("（資料表還沒建立，請先在 Supabase SQL Editor 執行 schema_extra.sql）" if status == "missing" else ""))
     else:
-        c1, c2 = st.columns([2, 3])
+        c1, _c2 = st.columns([2, 3])
         with c1:
             tr_type = seg("比賽類型", ["例行賽", "季後賽"], "tr_type")
         st_code = TYPE_OPTIONS[tr_type]
@@ -4001,48 +4007,8 @@ if PAGE == "跑動距離":
         if not tr_seasons:
             st.info(f"還沒有{tr_type}的跑動數據。")
         else:
-            with c2:
-                tr_season = st.selectbox("球季", tr_seasons[::-1], key="tr_season",
-                                         format_func=lambda x: x + ("　★" if any(s_ == x for s_, _ in CHAMP_SET) else ""))
-
-            # ===== 1. 各隊跑動地圖 =====
-            slot1 = section(f"1　{tr_season} 各隊跑動地圖",
-                            "每個點是一支球隊：橫軸每場跑幾公里、縱軸平均速度；虛線是聯盟平均，★ 是當季冠軍")
-            cur = T[T["season"] == tr_season].dropna(subset=["dist_km"])
-            fig = go.Figure()
-            others = cur[~cur["champion"]]
-            fig.add_trace(go.Scatter(
-                x=others["dist_km"], y=others["spd"], mode="markers+text", text=others["abbreviation"],
-                textposition="top center", textfont=dict(size=10, color=INK_2), name="其他球隊",
-                marker=dict(size=10, color="#b3adc2", line=dict(width=1, color=SURFACE)),
-                hovertemplate="%{text}<br>每場 %{x:.2f} 公里<br>平均 %{y:.2f} 公里／小時<extra></extra>"))
-            chs = cur[cur["champion"]]
-            if len(chs):
-                fig.add_trace(go.Scatter(
-                    x=chs["dist_km"], y=chs["spd"], mode="markers+text", text=chs["abbreviation"],
-                    textposition="top center", textfont=dict(size=11, color=INK), name="冠軍",
-                    marker=dict(symbol="star", size=18, color=[TEAM_COLORS.get(a, ACCENT) for a in chs["abbreviation"]],
-                                line=dict(width=1.2, color=SURFACE)),
-                    hovertemplate="★ 冠軍 %{text}<br>每場 %{x:.2f} 公里<br>平均 %{y:.2f} 公里／小時<extra></extra>"))
-            fig.add_vline(x=cur["dist_km"].mean(), line=dict(color=MUTED, dash="dot", width=1))
-            fig.add_hline(y=cur["spd"].mean(), line=dict(color=MUTED, dash="dot", width=1))
-            fig.update_xaxes(title="每場跑動距離（公里，越右跑越多）")
-            fig.update_yaxes(title="平均速度（公里／小時）")
-            fig.update_layout(showlegend=False)
-            st.plotly_chart(style(fig, 440), width="stretch")
-            lines = []
-            if len(chs):
-                r0 = chs.iloc[0]
-                lines.append(f"{tr_season} 冠軍 <b>{team_label(r0['abbreviation'])}</b> 每場跑 {r0['dist_km']:.1f} 公里，"
-                             f"聯盟第 {r0['rk_dist_km']:.0f} 名；平均速度第 {r0['rk_spd']:.0f} 名。")
-            top = cur.sort_values("dist_km", ascending=False).iloc[0]
-            lines.append(f"這季跑最多的是 {team_label(top['abbreviation'])}（{top['dist_km']:.1f} 公里，勝率聯盟第 {top['rk_win']:.0f} 名）；"
-                         f"最多和最少只差 {cur['dist_km'].max() - cur['dist_km'].min():.1f} 公里。")
-            insight(lines, where=slot1, label="發現")
-
-            # ===== 2. 每一位冠軍排第幾 =====
-            st.divider()
-            slot2 = section("2　每一位冠軍的跑動排第幾？", "聯盟排名 1＝跑最多／最快；最後一欄是勝率排名，拿來對照")
+            # ===== 1 每一位冠軍排第幾（先回答假設；1103-1） =====
+            slot2 = section("1　每一位冠軍的跑動排第幾？", "聯盟排名 1＝跑最多／最快；最後一欄是勝率排名，拿來對照")
             CHT = T[T["champion"]].sort_values("season")
             if CHT.empty:
                 st.info("跑動數據的球季裡沒有已完成的冠軍球季。")
@@ -4068,10 +4034,14 @@ if PAGE == "跑動距離":
                     f"排在中段（第 8～23 名）的有 {mid} 位；同一批冠軍的勝率排名中位數是第 {CHT['rk_win'].median():.0f} 名。",
                 ], check=("成立：冠軍多半排中段，不是靠跑得多。" if 8 <= med <= 23 else
                           ("不成立：冠軍多半跑得比別人多。" if med < 8 else "不成立：冠軍反而多半跑得比較少。")))
+            with st.expander("這頁的名詞是什麼意思？（名詞小辭典）"):
+                term_table(["每場跑動距離", "平均速度", "進攻速度／防守速度", "比同季聯盟平均多多少", "每 36 分鐘跑動", "相關係數 r"],
+                           first_note="平均速度只有 7 公里／小時左右，是因為它把走路、站著等罰球的時間都算進去，"
+                                      "不是球員衝刺的速度。")
 
-            # ===== 3. 跑得多和贏球有關嗎 =====
             st.divider()
-            slot3 = section("3　跑得多和贏球有關嗎？",
+            # ===== 2 跑得多和贏球有關嗎 =====
+            slot3 = section("2　跑得多和贏球有關嗎？",
                             "每個點是一隊一季：橫軸是「比同季聯盟平均多多少」（排除年代差異），縱軸是勝率；★ 是冠軍")
             tr_m = pills("指標", list(TRACK_OPTS), "tr_metric", default="每場跑動距離")
             col, unit = TRACK_OPTS[tr_m]
@@ -4104,9 +4074,61 @@ if PAGE == "跑動距離":
                 ], check=("成立：|r| < 0.3，跑得多和勝率只有弱相關。" if abs(r) < 0.3 else
                           f"不成立：|r| = {abs(r):.2f}，跑動和勝率有明顯關係。"))
 
-            # ===== 4. 隊上誰跑最多 =====
+            # ===== 3 單一球季深入看（球季條件只放在這一節；1103-1）=====
             st.divider()
-            slot4 = section(f"4　{tr_season} 隊上誰跑最多？", "每 36 分鐘跑動＝把上場時間換算成同樣 36 分鐘，替補和先發才能公平比較")
+            section("3　單一球季深入看", "選一個球季，看 30 隊的跑動地圖和隊上誰跑最多；底下 3-1 各隊跑動地圖、3-2 隊上誰跑最多")
+            _sc, _ = st.columns([2, 3])
+            with _sc:
+                tr_season = st.selectbox("球季", tr_seasons[::-1], key="tr_season",
+                                         format_func=lambda x: x + ("　★" if any(s_ == x for s_, _ in CHAMP_SET) else ""))
+
+            # ===== 3-1 各隊跑動地圖 =====
+            slot1 = section(f"3-1　{tr_season} 各隊跑動地圖",
+                            "每個點是一支球隊：橫軸每場跑幾公里、縱軸平均速度；虛線是聯盟平均，★ 是當季冠軍；"
+                            "只標出冠軍、跑最多、跑最少三隊，其他球隊把滑鼠移上去看", level=2)
+            cur = T[T["season"] == tr_season].dropna(subset=["dist_km"])
+            fig = go.Figure()
+            others = cur[~cur["champion"]]
+            fig.add_trace(go.Scatter(
+                x=others["dist_km"], y=others["spd"], mode="markers", text=[team_label(a_) for a_ in others["abbreviation"]],
+                name="其他球隊",
+                marker=dict(size=10, color="#b3adc2", line=dict(width=1, color=SURFACE)),
+                hovertemplate="%{text}<br>每場 %{x:.2f} 公里<br>平均 %{y:.2f} 公里／小時<extra></extra>"))
+            chs = cur[cur["champion"]]
+            if len(chs):
+                fig.add_trace(go.Scatter(
+                    x=chs["dist_km"], y=chs["spd"], mode="markers+text",
+                    text=[f"★ {ALL_ZH.get(a_, a_)}" for a_ in chs["abbreviation"]],
+                    textposition="top center", textfont=dict(size=11, color=INK), name="冠軍",
+                    marker=dict(symbol="star", size=18, color=[TEAM_COLORS.get(a, ACCENT) for a in chs["abbreviation"]],
+                                line=dict(width=1.2, color=SURFACE)),
+                    hovertemplate="冠軍 %{text}<br>每場 %{x:.2f} 公里<br>平均 %{y:.2f} 公里／小時<extra></extra>"))
+            # 只標跑最多、跑最少兩隊（冠軍已經有★ 和隊名），其他滑鼠移上去看（1103-3）
+            if len(cur) >= 2:
+                for r_, txt_ in [(cur.loc[cur["dist_km"].idxmax()], "跑最多"), (cur.loc[cur["dist_km"].idxmin()], "跑最少")]:
+                    if not r_["champion"]:
+                        fig.add_annotation(x=r_["dist_km"], y=r_["spd"], text=f"{ALL_ZH.get(r_['abbreviation'], r_['abbreviation'])}（{txt_}）",
+                                           showarrow=True, arrowhead=0, arrowcolor=MUTED, ax=0, ay=-26,
+                                           font=dict(size=11, color=INK_2))
+            fig.add_vline(x=cur["dist_km"].mean(), line=dict(color=MUTED, dash="dot", width=1))
+            fig.add_hline(y=cur["spd"].mean(), line=dict(color=MUTED, dash="dot", width=1))
+            fig.update_xaxes(title="每場跑動距離（公里，越右跑越多）")
+            fig.update_yaxes(title="平均速度（公里／小時）")
+            fig.update_layout(showlegend=False)
+            st.plotly_chart(style(fig, 440), width="stretch")
+            lines = []
+            if len(chs):
+                r0 = chs.iloc[0]
+                lines.append(f"{tr_season} 冠軍 <b>{team_label(r0['abbreviation'])}</b> 每場跑 {r0['dist_km']:.1f} 公里，"
+                             f"聯盟第 {r0['rk_dist_km']:.0f} 名；平均速度第 {r0['rk_spd']:.0f} 名。")
+            top = cur.sort_values("dist_km", ascending=False).iloc[0]
+            lines.append(f"這季跑最多的是 {team_label(top['abbreviation'])}（{top['dist_km']:.1f} 公里，勝率聯盟第 {top['rk_win']:.0f} 名）；"
+                         f"最多和最少只差 {cur['dist_km'].max() - cur['dist_km'].min():.1f} 公里。")
+            insight(lines, where=slot1, label="發現")
+
+            st.divider()
+            # ===== 3-2 隊上誰跑最多 =====
+            slot4 = section(f"3-2　{tr_season} 隊上誰跑最多？", "每 36 分鐘跑動＝把上場時間換算成同樣 36 分鐘，替補和先發才能公平比較", level=2)
             champs_, others_ = split_teams([a for a in cur["abbreviation"].dropna().unique()], tr_season, tr_season)
             others_ = sorted(others_)
             tr_team = team_picker_one(champs_, others_, "tr_team", "當季冠軍", "其他球隊")
