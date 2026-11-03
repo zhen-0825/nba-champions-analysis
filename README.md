@@ -45,6 +45,7 @@ Streamlit 網頁：球季趨勢、球隊 × 球季交叉分析、冠軍球季比
 | `app.py` | Streamlit 網頁，從 Supabase 讀資料呈現 |
 | `load_recap.py` / `schema_recap.sql` | 每日戰報：全聯盟本季每場比分與球員數據（每天自動更新） |
 | `schema_schedule.sql` | 未來 7 天賽程表（每日戰報的下一場預測用） |
+| `predict.py` / `save_predictions.py` / `schema_predictions.sql` | 每天比賽前存下預測，隔天自動對答案（每日戰報的「預測準不準」） |
 
 ## 本機執行
 
