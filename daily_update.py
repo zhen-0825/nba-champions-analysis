@@ -7,6 +7,7 @@
 
 會依序執行：
   0. load_recap.py                              全聯盟本季每場比分與球員數據（每日戰報）
+  0a. save_predictions.py --backfill            存下一個比賽日的預測（隔天對答案）；沒存到的過去比賽日會補算
   0b. load_pbp.py                               最近 3 天比賽的逐回合得分紀錄（比賽走勢、戰報稿）
   1. load_to_supabase.py --start <本季開始日>   八隊球員逐場數據、全聯盟球隊數據
   2. load_extra.py --current                    本季的投籃、戰術、陣容、跑動數據
@@ -61,11 +62,12 @@ def main():
         print(title)
         log.write(title + "\n")
         ok0 = run(["load_recap.py"] + dry, log)            # 每日戰報：全聯盟本季比分（最快，先跑）
+        okd = run(["save_predictions.py", "--backfill"] + dry, log)   # 預測先存起來，隔天才能對答案
         okp = run(["load_pbp.py"] + dry, log)              # 逐回合得分紀錄：補最近 3 天還沒抓的比賽（比賽走勢、戰報稿）
         ok1 = run(["load_to_supabase.py", "--start", start] + dry, log)
         ok2 = run(["load_extra.py", "--current"] + dry, log)
         ok3 = run(["load_to_supabase.py", "--next", str(TEAMS_PER_DAY)] + dry, log)
-        result = "全部成功" if ok0 and okp and ok1 and ok2 and ok3 else "有部分失敗，請看上面的訊息或記錄檔"
+        result = "全部成功" if ok0 and okd and okp and ok1 and ok2 and ok3 else "有部分失敗，請看上面的訊息或記錄檔"
         log.write(f"\n===== 結束：{result} =====\n")
         print(f"\n===== 結束：{result} =====\n記錄檔：{log_path}")
     clean_old_logs()

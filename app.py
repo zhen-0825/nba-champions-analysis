@@ -1678,11 +1678,8 @@ def standings(tg, day, conf):
 
 
 # ---------- 每日戰報：下一場預測（比賽勝率、球員表現）----------
-HOME_EDGE = 2.5      # 主場優勢：NBA 主隊平均多贏約 2～3 分
-B2B_PENALTY = 1.5    # 背靠背（前一天才打過）少約 1.5 分
-STAR_PENALTY = 2.0   # 主力上一場沒上場，若持續缺陣少約 2 分
-GAME_SD = 12.0       # NBA 一場比賽的分差，和預測相比大約會差 ±12 分（標準差）
-SHRINK = 8           # 開季場數少，數字不穩：打 n 場只相信 n/(n+8)，其餘拉回聯盟平均
+from predict import (B2B_PENALTY, GAME_SD, HOME_EDGE, SHRINK, STAR_PENALTY,  # noqa: E402  共用的預測算法
+                     missing_stars, predict_game, project_players, team_ratings, win_prob)
 
 
 @st.cache_data(ttl=900)
@@ -1692,51 +1689,6 @@ def load_schedule_after(season, after):
     if not df.empty:
         df["game_date"] = pd.to_datetime(df["game_date"])
     return df
-
-
-def win_prob(margin):
-    """預測分差 → 勝率：假設實際分差＝預測分差＋常態分布的誤差（標準差 12 分）"""
-    import math
-    return 0.5 * (1 + math.erf(margin / (GAME_SD * math.sqrt(2))))
-
-
-def team_ratings(games):
-    """每隊到目前為止的平均：淨勝分、得分、失分；場數少的往聯盟平均拉"""
-    reg = games[games["season_type"] == "Regular Season"]
-    if reg.empty:
-        return {}, 112.0
-    lg = float(reg["pts"].mean())
-    out = {}
-    for abbr, g in reg.groupby("abbreviation"):
-        n = len(g)
-        w = n / (n + SHRINK)
-        out[abbr] = {"n": n, "pm": w * g["plus_minus"].mean(),
-                     "off": w * g["pts"].mean() + (1 - w) * lg,
-                     "def": w * g["opp_pts"].mean() + (1 - w) * lg,
-                     "last": g["game_date"].max()}
-    return out, lg
-
-
-def predict_game(home, away, game_day, ratings, lg, missing=None):
-    """一場比賽的預測：回傳主隊勝率、預測比分、影響因素（每個因素都寫出加減幾分）"""
-    missing = missing or {}
-    h, a = ratings.get(home), ratings.get(away)
-    if not h or not a:
-        return None
-    margin = h["pm"] - a["pm"] + HOME_EDGE
-    factors = [f"實力：{home} 場均淨勝 {h['pm']:+.1f}、{away} {a['pm']:+.1f}", f"{home} 主場 +{HOME_EDGE}"]
-    for abbr, r, sign in [(home, h, -1), (away, a, 1)]:
-        if (game_day - r["last"]).days == 1:
-            margin += sign * B2B_PENALTY
-            factors.append(f"{abbr} 背靠背 −{B2B_PENALTY}")
-        if abbr in missing:
-            margin += sign * STAR_PENALTY
-            factors.append(f"{abbr} {missing[abbr]} 上一場缺陣 −{STAR_PENALTY:g}")
-    home_pts = (h["off"] + a["def"]) / 2
-    away_pts = (a["off"] + h["def"]) / 2
-    mid = (home_pts + away_pts) / 2
-    return {"p_home": win_prob(margin), "margin": margin,
-            "home_pts": mid + margin / 2, "away_pts": mid - margin / 2, "factors": factors}
 
 
 @st.cache_data(ttl=900, show_spinner="計算預測準確率中…")
@@ -1759,52 +1711,6 @@ def backtest(tg):
                 total += 1
                 right += int((p["p_home"] >= 0.5) == (hm["wl"] == "W"))
     return right, total
-
-
-def project_players(team, opp, pl, sa, ratings, lg, n=3):
-    """球員下一場預估：近 10 場佔 6 成、本季平均佔 4 成；得分再依對手防守（平常失幾分）微調"""
-    if pl.empty or sa.empty:
-        return []
-    season = sa[(sa["abbreviation"] == team) & (sa["gp"] >= 2)]
-    opp_r = ratings.get(opp)
-    factor = 1.0
-    if opp_r:
-        factor = max(0.92, min(1.08, opp_r["def"] / lg))
-    team_games = pl[pl["abbreviation"] == team]["game_id"].unique()
-    last_game = pl[pl["abbreviation"] == team].sort_values("game_date")["game_id"].iloc[-1] if len(team_games) else None
-    out = []
-    for r in season.itertuples():
-        rec = pl[(pl["player_id"] == r.player_id) & (pl["abbreviation"] == team)].sort_values("game_date").tail(10)
-        if rec.empty:
-            continue
-        gp = r.gp
-        proj = {}
-        for k in ["pts", "reb", "ast"]:
-            proj[k] = 0.6 * rec[k].mean() + 0.4 * getattr(r, k) / gp
-        proj["pts"] *= factor
-        sd = rec["pts"].std()
-        spread = max(3.0, float(sd)) if len(rec) >= 3 and pd.notna(sd) else 6.0
-        out.append({"name": r.player_name, "pts": proj["pts"], "reb": proj["reb"], "ast": proj["ast"],
-                    "lo": max(0, proj["pts"] - spread), "hi": proj["pts"] + spread,
-                    "out": last_game is not None and not ((pl["game_id"] == last_game) & (pl["player_id"] == r.player_id)).any()})
-    return sorted(out, key=lambda x: -x["pts"])[:n]
-
-
-def missing_stars(pl, sa):
-    """每隊本季上場時間最多的球員，如果上一場沒有上場，記下來（預測時扣分）"""
-    out = {}
-    if pl.empty or sa.empty:
-        return out
-    for abbr, g in pl.groupby("abbreviation"):
-        s_ = sa[(sa["abbreviation"] == abbr) & (sa["gp"] >= 2)].copy()
-        if s_.empty:
-            continue
-        s_["mpg"] = s_["min"] / s_["gp"]
-        star = s_.sort_values("mpg").iloc[-1]
-        last = g.sort_values("game_date")["game_id"].iloc[-1]
-        if not ((g["game_id"] == last) & (g["player_id"] == star.player_id)).any():
-            out[abbr] = star.player_name
-    return out
 
 
 def render_predictions(tg, season):
@@ -1867,6 +1773,7 @@ def render_predictions(tg, season):
 3. 分差換成勝率：真實比賽和預測大約會差 ±{GAME_SD:g} 分，所以預測贏 5 分的球隊，勝率大約 66%，不是 100%。
 4. 預估比分＝（自己平常得分＋對手平常失分）÷ 2，再依預測分差左右分開。
 5. **回頭驗證**：本季每一場打完的比賽，都只用「那一天以前」的資料重算一次，看猜對幾場；兩隊都至少打過 3 場才算。
+6. **每天對答案**：這份預測每天會在比賽前存進資料庫，隔天比賽打完，下方「預測準不準」會把預測和實際結果對照，所有紀錄都能回頭看。
 
 **球員表現**
 - 預估＝最近 10 場平均 × 0.6 ＋ 本季平均 × 0.4（最近狀況比較重要，但不能只看最近）。
@@ -1875,6 +1782,167 @@ def render_predictions(tg, season):
 
 **沒有考慮的**：傷兵名單、先發陣容、交易、旅行距離、球員之間的對位。這些資料庫目前沒有。
 """)
+
+
+# ---------- 每日戰報：預測準不準（前一天存下的預測 vs 實際結果）----------
+OK_TXT = '<span style="color:#15803d;font-weight:700">✓ 猜對</span>'
+NG_TXT = '<span style="color:#b91c1c;font-weight:700">✗ 猜錯</span>'
+
+
+@st.cache_data(ttl=900, show_spinner="讀取預測紀錄中…")
+def load_saved_predictions(season):
+    g = _read_filtered("recap_predictions", [("eq", "season", season)], ["game_date", "game_id"])
+    p = _read_filtered("recap_player_predictions", [("eq", "season", season)], ["game_date", "game_id", "player_id"])
+    for d in (g, p):
+        if not d.empty:
+            d["game_date"] = pd.to_datetime(d["game_date"])
+    return g, p
+
+
+def graded_games(tg, preds):
+    """把存下的預測和實際比分對起來：猜對沒、比分差多少"""
+    if preds.empty:
+        return pd.DataFrame()
+    t = tg[["game_id", "is_home", "pts", "abbreviation"]].copy()
+    t["is_home"] = t["is_home"].astype(bool)
+    home = t[t["is_home"]].set_index("game_id")
+    away = t[~t["is_home"]].set_index("game_id")
+    df = preds[preds["game_id"].isin(home.index) & preds["game_id"].isin(away.index)].copy()
+    if df.empty:
+        return df
+    for c in ["p_home", "home_pts", "away_pts", "margin"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    df["act_home"] = df["game_id"].map(home["pts"]).astype(float)
+    df["act_away"] = df["game_id"].map(away["pts"]).astype(float)
+    df["fav"] = [h if p >= 0.5 else a for h, a, p in zip(df["home_abbr"], df["away_abbr"], df["p_home"])]
+    df["winner"] = [h if x > y else a for h, a, x, y in zip(df["home_abbr"], df["away_abbr"], df["act_home"], df["act_away"])]
+    df["right"] = df["fav"] == df["winner"]
+    df["conf"] = df["p_home"].where(df["p_home"] >= 0.5, 1 - df["p_home"])
+    df["margin_err"] = ((df["act_home"] - df["act_away"]) - df["margin"]).abs()
+    df["score_err"] = ((df["act_home"] - df["home_pts"]).abs() + (df["act_away"] - df["away_pts"]).abs()) / 2
+    return df
+
+
+def day_summary(gd):
+    if gd.empty:
+        return pd.DataFrame()
+    out = (gd.groupby("game_date")
+             .agg(n=("right", "size"), right=("right", "sum"), margin_err=("margin_err", "mean"),
+                  live=("source", lambda s: (s == "當天存下").all()))
+             .reset_index().sort_values("game_date"))
+    out["acc"] = out["right"] / out["n"]
+    out["cum_acc"] = out["right"].cumsum() / out["n"].cumsum()
+    return out
+
+
+def render_pred_review(tg, season):
+    section("預測準不準（對答案）", "前一天存下的預測 vs 實際結果；每天自動對一次，所有紀錄都可以回頭看")
+    preds, ppreds = load_saved_predictions(season)
+    if preds.empty:
+        st.info("還沒有存下的預測。請先在 Supabase 執行 schema_predictions.sql，"
+                "之後每天的自動更新（daily_update.py）就會把預測存起來，隔天比賽打完自動對答案。"
+                "想立刻補上本季每一天，可以在電腦上執行：python save_predictions.py --backfill")
+        return
+    gd = graded_games(tg, preds)
+    if gd.empty:
+        st.caption("已經存下預測，但那些比賽還沒打完。等比賽結束、隔天資料更新後，這裡就會出現對答案的結果。")
+        return
+    ds = day_summary(gd)
+    last = ds.iloc[-1]
+    lines = [f"<b>{last['game_date']:%m/%d}</b>（美國時間）預測 <b>{int(last['n'])}</b> 場，"
+             f"猜對 <b>{int(last['right'])}</b> 場（{last['acc']:.0%}）；預測分差平均差了 {last['margin_err']:.1f} 分。"]
+    if len(ds) >= 2:
+        prev = ds.iloc[-2]
+        diff = (last["acc"] - prev["acc"]) * 100
+        trend = "持平" if abs(diff) < 0.5 else (f"進步 {diff:.0f} 個百分點" if diff > 0 else f"退步 {-diff:.0f} 個百分點")
+        lines.append(f"和前一個比賽日 <b>{prev['game_date']:%m/%d}</b>（{int(prev['right'])}/{int(prev['n'])}，"
+                     f"{prev['acc']:.0%}）相比：<b>{trend}</b>。")
+    live = gd[gd["source"] == "當天存下"]
+    if len(live):
+        lines.append(f"本季累計（比賽前就存下的）：{int(live['right'].sum())}/{len(live)}（{live['right'].mean():.0%}）"
+                     + (f"；加上事後回推的共 {int(gd['right'].sum())}/{len(gd)}（{gd['right'].mean():.0%}）。"
+                        if len(live) < len(gd) else "。"))
+    else:
+        lines.append(f"本季累計（事後回推）：{int(gd['right'].sum())}/{len(gd)}（{gd['right'].mean():.0%}）。"
+                     "從現在開始，每天比賽前存下的預測會另外統計。")
+    insight(lines)
+
+    # 每天的猜對率：直條＝當天，折線＝累計
+    with fold(f"每天的猜對率（共 {len(ds)} 個比賽日）"):
+        fig = go.Figure()
+        fig.add_trace(go.Bar(x=ds["game_date"], y=ds["acc"], name="當天猜對率",
+                             marker=dict(color=[ACCENT if l else "#c4b5fd" for l in ds["live"]]),
+                             customdata=ds[["right", "n"]].values,
+                             hovertemplate="%{x|%m/%d}　猜對 %{customdata[0]}/%{customdata[1]}（%{y:.0%}）<extra></extra>"))
+        fig.add_trace(go.Scatter(x=ds["game_date"], y=ds["cum_acc"], name="本季累計", mode="lines+markers",
+                                 line=dict(color=INK_2, width=2), marker=dict(size=5),
+                                 hovertemplate="%{x|%m/%d}　累計 %{y:.0%}<extra></extra>"))
+        fig.add_hline(y=0.5, line=dict(color=MUTED, dash="dot", width=1),
+                      annotation_text="亂猜 50%", annotation_position="bottom right")
+        fig.update_yaxes(tickformat=".0%", range=[0, 1.05])
+        fig.update_xaxes(tickformat="%m/%d")
+        rounded(fig)
+        st.caption("深紫色＝比賽前就存下的預測；淺紫色＝事後用「那天以前的資料」回推的。")
+        st.plotly_chart(style(fig, 300), width="stretch")
+
+    # 選一天回頭看
+    days = list(ds["game_date"][::-1])
+    pick = pills("回頭看哪一天的預測（美國時間）", days[:14], "pr_day", default=days[0],
+                 format_func=lambda d: pd.Timestamp(d).strftime("%m/%d") + ("　最新" if d == days[0] else ""))
+    day = pd.Timestamp(pick)
+    g = gd[gd["game_date"] == day].sort_values("conf", ascending=False)
+    rows = []
+    for r in g.itertuples():
+        rows.append({"比賽": f"{r.away_abbr} @ {r.home_abbr}", "看好": team_label(r.fav), "_key": r.fav,
+                     "勝率": f"{r.conf:.0%}", "預測比分": f"{r.away_pts:.0f} : {r.home_pts:.0f}",
+                     "實際比分": f"{r.act_away:.0f} : {r.act_home:.0f}", "結果": OK_TXT if r.right else NG_TXT,
+                     "分差差了": f"{r.margin_err:.0f} 分", "來源": r.source})
+    st.markdown(f'<div class="chart-headline">{day:%m/%d}：猜對 {int(g["right"].sum())}/{len(g)} 場</div>',
+                unsafe_allow_html=True)
+    nice_table(pd.DataFrame(rows), num_cols=("勝率", "預測比分", "實際比分", "分差差了"), dot_col="看好", colors=TEAM_COLORS)
+    wrong_sure = g[(~g["right"]) & (g["conf"] >= 0.65)]
+    if len(wrong_sure):
+        st.caption("爆冷門（有 65% 以上把握卻猜錯）：" + "、".join(
+            f"{r.winner} 贏了（原本看好 {r.fav} {r.conf:.0%}）" for r in wrong_sure.itertuples()))
+
+    # 球員：預估 vs 實際
+    pp = ppreds[ppreds["game_date"] == day] if not ppreds.empty else ppreds
+    if pp.empty:
+        return
+    act = load_recap_players(season, day.strftime("%Y-%m-%d"))
+    act = act[act["game_date"] == day] if not act.empty else act
+    a_idx = act.set_index(["game_id", "player_id"]) if not act.empty else None
+    prow, inside, n_played = [], 0, 0
+    for r in pp.itertuples():
+        key = (r.game_id, int(r.player_id))
+        has = a_idx is not None and key in a_idx.index
+        a = a_idx.loc[key] if has else None
+        if a is not None and isinstance(a, pd.DataFrame):
+            a = a.iloc[0]
+        lo, hi, est = float(r.pts_lo), float(r.pts_hi), float(r.pts)
+        if a is None:
+            verdict, apts = '<span style="color:#8f889f">沒上場</span>', "-"
+        else:
+            n_played += 1
+            v = float(a["pts"])
+            apts = f"{v:.0f}"
+            if lo <= v <= hi:
+                inside += 1
+                verdict = '<span style="color:#15803d;font-weight:700">在範圍內</span>'
+            else:
+                verdict = ('<span style="color:#7c3aed;font-weight:700">比預估好</span>' if v > hi
+                           else '<span style="color:#b45309;font-weight:700">比預估差</span>')
+        prow.append({"球員": r.player_name, "_key": r.abbreviation, "球隊": team_label(r.abbreviation),
+                     "預估得分": f"{est:.0f}", "範圍": f"{lo:.0f}–{hi:.0f}", "實際得分": apts, "判定": verdict,
+                     "籃板 預估→實際": f"{float(r.reb):.0f} → {a['reb']:.0f}" if a is not None else "-",
+                     "助攻 預估→實際": f"{float(r.ast):.0f} → {a['ast']:.0f}" if a is not None else "-"})
+    head = (f"球員得分：{n_played} 位有上場，{inside} 位落在預估範圍內（{inside / n_played:.0%}）"
+            if n_played else "球員得分：被預估的球員都沒有上場")
+    with fold(head):
+        st.caption("範圍是用他最近幾場得分的起伏估的，理想上大約 7 成會落在範圍內。")
+        nice_table(pd.DataFrame(prow), num_cols=("預估得分", "範圍", "實際得分", "籃板 預估→實際", "助攻 預估→實際"),
+                   dot_col="球隊", colors=TEAM_COLORS)
+
 
 
 def fold(label):
@@ -2157,6 +2225,8 @@ if PAGE == "每日戰報":
         seg("頁面區塊", ["全部展開", "全部收起"], "rc_open")
         st.caption("每個大區塊都可以點標題收起來；收起來時，區塊上方的一句話結論還是看得到。")
         render_predictions(tg, season)
+        st.divider()
+        render_pred_review(tg, season)
         st.divider()
         section("比賽結果", "選一個比賽日，看比分、值得關注的球員、球隊隱憂與戰績榜")
         dates = sorted(tg["game_date"].unique(), reverse=True)
