@@ -819,7 +819,7 @@ PAGES = [
     ("冠軍故事", "冠軍密碼", "奪冠最需要什麼？",
      "冠軍在攻守效率、三分、籃板等 10 項指標排聯盟第幾；三分時代與冠軍輪替。", {"season"}),
     ("冠軍故事", "投籃分布", "冠軍從哪裡出手？",
-     "半場球場圖：奪冠那季的出手位置，和聯盟平均、和自己其他球季比較。", set()),
+     "每一位冠軍 vs 同季聯盟的出手選擇；單一球隊的半場球場圖；跨球季的變化。", set()),
     ("冠軍故事", "戰術使用", "冠軍靠什麼戰術得分？",
      "戰術地圖、八位冠軍的共同點、全聯盟各隊比較與奪冠方程式。", set()),
     ("冠軍故事", "上場陣容", "冠軍的核心五人是誰？",
@@ -834,6 +834,10 @@ PAGES = [
      "主場勝率 − 客場勝率：冠軍 vs 其他球隊、主場優勢是不是一年比一年小、冠軍在季後賽客場的戰績。", set()),
     ("冠軍故事", "例行賽與季後賽", "球星進季後賽會更強嗎？",
      "冠軍的頭號球星進季後賽後，得分、上場時間、真實命中率怎麼變；和其他季後賽球隊的球星比較。", set()),
+    ("冠軍故事", "得分穩定度", "冠軍球星比較不會爆冷嗎？",
+     "每場得分的起伏：冠軍頭號球星和同得分水準的球員比，是不是比較穩定、低迷場比較少。", set()),
+    ("冠軍故事", "月份趨勢", "冠軍是不是越打越好？",
+     "每個月的勝率、前半季 vs 後半季：冠軍和同樣強的其他球隊，誰在季末比較強。", set()),
     ("自由探索", "球季趨勢", "各隊一路怎麼變化？",
      "選一個指標，看各隊 20 季的折線；可聚焦幾支球隊，其他變灰。", {"team", "season", "type", "metric"}),
     ("自由探索", "球隊 × 球季", "哪隊在哪季特別突出？",
@@ -1179,6 +1183,13 @@ TERMS = {
     "比同季聯盟平均多多少": ("這隊減掉同一季 30 隊的平均。不同年代打法不同，和同季比才公平", "這隊數值 − 同季 30 隊平均"),
     "每 36 分鐘跑動": ("把上場時間換算成同樣 36 分鐘，替補和先發才能公平比", "每場距離 ÷ 場均分鐘 × 36"),
     "相關係數 r": ("兩件事一起變大或變小的程度，−1～+1；0 代表沒關係", "|r| < 0.1 幾乎沒有、0.3 中等、0.5 以上強"),
+    "得分起伏": ("每場得分忽高忽低的程度；越小越穩定", "這一季每場得分的標準差 ÷ 場均得分"),
+    "同得分水準": ("和「場均得分差不多」的球員比；得分越多的人起伏自然越小，直接比不公平", "所有頭號球星畫一條「起伏 vs 場均」的直線"),
+    "低迷場": ("得分不到自己這一季平均的六成，例如場均 25 分的人只得 14 分", "得分 < 0.6 × 自己的場均"),
+    "爆發場": ("得分到自己這一季平均的 1.5 倍以上", "得分 ≥ 1.5 × 自己的場均"),
+    "前半季／後半季": ("這一季自己的比賽依日期排好，前一半場次和後一半場次", "82 場＝前 41 場、後 41 場"),
+    "其他強隊": ("整季勝率六成以上、但沒有奪冠的球隊季；用來和冠軍比「同樣強的隊會不會也越打越好」", "例行賽勝率 ≥ 60%"),
+    "勝率變化（百分點）": ("兩個勝率相減；60% → 70% 是 +10 個百分點", "後半季勝率 − 前半季勝率"),
     "陣容戰績": ("這 5 人「有同時上場過」的那些比賽的勝負，不代表他們打滿全場", "例：8 勝 2 敗＝10 場裡有同時上場"),
 }
 
@@ -2452,20 +2463,147 @@ if PAGE == "投籃分布":
                 + ("（資料表還不存在：請先到 Supabase SQL Editor 執行 schema_extra.sql）" if status == "missing" else ""))
     else:
         shot_seasons = [s for s in ALL_SEASONS if s >= SHOT_START][::-1]
+        # 比賽類型是整頁條件（第 1、2、3 節都跟著變；1031-1）
+        sh_type_zh = seg("比賽類型（整頁）", ["例行賽", "季後賽"], "sh_type")
+        sh_type = TYPE_OPTIONS[sh_type_zh]
+        zl_page = load_zone_league()
+
+        # ===== 1 每一位冠軍 vs 同季聯盟（先回答假設，不用選球隊；1031-1）=====
+        CH_GROUPS = {"中距離": ["中距離"], "禁區籃下": ["禁區籃下"], "三分（底角＋弧頂）": ["底角三分", "弧頂三分"]}
+
+        def champ_zone_rows():
+            """每一個冠軍球季：五大區出手佔比（冠軍）與同季聯盟。先讀 shot_zone_team 檢視表，沒有就改讀逐筆出手（比較慢）"""
+            out = []
+            for _, c in champs[(champs["season"] >= SHOT_START)].sort_values("season").iterrows():
+                if c["abbreviation"] not in ALL_TEAMS:
+                    continue
+                tid = int(c["team_id"])
+                zt_ = load_zone_team(tid)
+                if zt_ is not None and not zt_.empty:
+                    z_ = zt_[(zt_["season"] == c["season"]) & (zt_["season_type"] == sh_type)]
+                else:
+                    s_ = load_shots(tid, c["season"], sh_type)
+                    z_ = shots_to_zone_rows(s_) if not s_.empty else pd.DataFrame()
+                lz = (zl_page[(zl_page["season"] == c["season"]) & (zl_page["season_type"] == sh_type)]
+                      if not zl_page.empty else pd.DataFrame())
+                if z_.empty or lz.empty:
+                    continue
+                za_, zb_ = zone_table(z_), zone_table(lz)
+                if za_.empty or zb_.empty:
+                    continue
+                ga_, gb_ = group_table(za_), group_table(zb_)
+                row = {"season": c["season"], "abbr": c["abbreviation"], "fga": float(za_["fga"].sum())}
+                for g_ in GROUP_ORDER:
+                    row[f"c_{g_}"], row[f"l_{g_}"] = ga_.loc[g_, "share"], gb_.loc[g_, "share"]
+                for k_, gs in CH_GROUPS.items():
+                    row[f"c_{k_}"] = sum(ga_.loc[g_, "share"] for g_ in gs)
+                    row[f"l_{k_}"] = sum(gb_.loc[g_, "share"] for g_ in gs)
+                out.append(row)
+            return pd.DataFrame(out)
+
+        slot_c = section(f"1　每一位冠軍 vs 同季聯盟（{sh_type_zh}）",
+                         "一列一位冠軍：灰點＝同季聯盟平均、彩色點＝冠軍，點旁數字＝冠軍比聯盟多或少幾個百分點；"
+                         "可以切換看中距離、禁區籃下、三分")
+        CZ = champ_zone_rows()
+        if CZ.empty:
+            st.info("還沒有冠軍球季的投籃資料（或聯盟各區資料 shot_zone_league 還沒載入），"
+                    "請執行 python load_extra.py --only shots")
+        else:
+            cz_pick = seg("看哪一區", list(CH_GROUPS), "sh_c_zone")
+            labels = [f"{s} {ALL_ZH.get(a, a)}" for s, a in zip(CZ["season"], CZ["abbr"])]
+            cv, lv = CZ[f"c_{cz_pick}"], CZ[f"l_{cz_pick}"]
+            dv = (cv - lv) * 100
+            fig = go.Figure()
+            for lab, c_, l_ in zip(labels, cv, lv):
+                fig.add_trace(go.Scatter(x=[l_, c_], y=[lab, lab], mode="lines", showlegend=False, hoverinfo="skip",
+                                         line=dict(color="#d9d3e6", width=3)))
+            fig.add_trace(go.Scatter(x=lv, y=labels, mode="markers", name="同季聯盟平均",
+                                     marker=dict(size=11, color="#b3adc2", line=dict(width=1, color=SURFACE)),
+                                     hovertemplate="%{y}<br>聯盟 %{x:.1%}<extra></extra>"))
+            fig.add_trace(go.Scatter(x=cv, y=labels, mode="markers+text", name="冠軍",
+                                     marker=dict(size=14, color=[TEAM_COLORS.get(a, ACCENT) for a in CZ["abbr"]],
+                                                 line=dict(width=1.5, color=SURFACE)),
+                                     text=[f"{v:+.1f}" for v in dv],
+                                     textposition=["middle right" if v >= 0 else "middle left" for v in dv],
+                                     textfont=dict(size=11, color=INK_2),
+                                     hovertemplate="%{y}<br>冠軍 %{x:.1%}（比聯盟 %{text} 個百分點）<extra></extra>"))
+            fig.update_yaxes(type="category", autorange="reversed", showgrid=False)
+            lo_, hi_ = min(cv.min(), lv.min()), max(cv.max(), lv.max())
+            pad = max(0.01, (hi_ - lo_) * 0.25)
+            fig.update_xaxes(title=f"{cz_pick}出手佔比（每 100 次出手有幾次）", tickformat=".0%",
+                             range=[max(0, lo_ - pad), hi_ + pad], showgrid=True, gridcolor=GRID)
+            st.plotly_chart(style(fig, 90 + 44 * len(CZ)), width="stretch", config={"displayModeBar": False})
+
+            # 發現：一次檢查假設的三個部分（少投中距離、籃下多、三分多）
+            n_ = len(CZ)
+            parts = []
+            for k_, want_less, txt in [("中距離", True, "中距離比聯盟少"), ("禁區籃下", False, "禁區籃下比聯盟多"),
+                                       ("三分（底角＋弧頂）", False, "三分比聯盟多")]:
+                d_ = CZ[f"c_{k_}"] - CZ[f"l_{k_}"]
+                k = int((d_ < 0).sum() if want_less else (d_ > 0).sum())
+                parts.append((txt, k))
+            ok_parts = sum(k > n_ / 2 for _, k in parts)
+            verdict = "成立" if ok_parts == 3 else ("部分成立" if ok_parts else "不成立")
+            big = CZ.assign(d=dv).sort_values("d")
+            lines = [f"<b>{cz_pick}：</b>{n_} 位冠軍裡，有 {int((dv < 0).sum())} 位比同季聯盟少、{int((dv > 0).sum())} 位比較多"
+                     f"（平均差 {dv.mean():+.1f} 個百分點）。",
+                     f"差最多的是 {big.iloc[0]['season']} {ALL_ZH.get(big.iloc[0]['abbr'], '')}（{big.iloc[0]['d']:+.1f}）"
+                     f"與 {big.iloc[-1]['season']} {ALL_ZH.get(big.iloc[-1]['abbr'], '')}（{big.iloc[-1]['d']:+.1f}）。",
+                     "讀法：彩色點在灰點左邊＝冠軍在這一區投得比聯盟少，右邊＝比較多；線越長差越多。"
+                     "切換三個區域，就能一次檢查假設的三個部分。"]
+            chk = f"{verdict}：" + "；".join(f"{t} {k} / {n_} 位" for t, k in parts) + "（超過一半才算成立）。"
+            insight(lines, where=slot_c, check=chk)
+            with st.expander("看每一位冠軍五大區的明細"):
+                rows = []
+                for _, r in CZ.iterrows():
+                    row = {"球季": r["season"], "冠軍": ALL_ZH.get(r["abbr"], r["abbr"]), "_key": r["abbr"]}
+                    for g_ in GROUP_ORDER:
+                        row[g_] = f"{r[f'c_{g_}']:.0%}（{(r[f'c_{g_}'] - r[f'l_{g_}']) * 100:+.1f}）"
+                    rows.append(row)
+                nice_table(pd.DataFrame(rows), num_cols=tuple(GROUP_ORDER), dot_col="冠軍", colors=TEAM_COLORS)
+                st.caption("每一格：冠軍這一區的出手佔比（括號＝比同季聯盟多或少幾個百分點）。")
+        # 名詞小辭典：五大區在哪裡（1031-3；1031-1 移到第一張圖下面）
+        with st.expander("五大區是哪裡？（名詞小辭典）"):
+            g1, g2 = st.columns([2, 3], gap="large")
+            with g1:
+                zf = go.Figure()
+                for x_, y_, t_ in [(0, 12, "禁區籃下"), (0, 95, "油漆區"), (-150, 110, "中距離"),
+                                   (150, 110, "中距離"), (-236, 40, "底角<br>三分"), (236, 40, "底角<br>三分"),
+                                   (0, 280, "弧頂三分")]:
+                    zf.add_annotation(x=x_, y=y_, text=t_, showarrow=False,
+                                      font=dict(size=12, color=INK), bgcolor="rgba(255,255,255,0.85)")
+                zf.add_shape(type="rect", x0=-80, y0=-47.5, x1=80, y1=142.5, line=dict(width=0),
+                             fillcolor="rgba(124,58,237,0.10)", layer="below")
+                zf.add_shape(type="circle", x0=-40, y0=-40, x1=40, y1=40, line=dict(width=0),
+                             fillcolor="rgba(124,58,237,0.22)", layer="below")
+                zf.update_layout(shapes=court_shapes() + list(zf.layout.shapes or []))
+                zf.update_xaxes(range=[-255, 255], visible=False, fixedrange=True, constrain="domain")
+                zf.update_yaxes(range=[-55, 310], visible=False, fixedrange=True, constrain="domain",
+                                scaleanchor="x", scaleratio=1)
+                zf = style(zf, 300)
+                zf.update_layout(showlegend=False)
+                zf.add_trace(go.Scatter(x=[0], y=[0], mode="markers", hoverinfo="skip",
+                                        marker=dict(size=1, color="rgba(0,0,0,0)")))
+                st.plotly_chart(zf, width="stretch", config={"displayModeBar": False, "staticPlot": True})
+            with g2:
+                term_table(GROUP_ORDER + ["每次出手得分"],
+                           first_note="油漆區和禁區籃下都在籃框附近：<b>禁區籃下</b>只算最裡面的小半圓，"
+                                      "<b>油漆區</b>是長方形裡剩下的部分。")
+        st.divider()
+
+        # ===== 2 單一球隊深入看（球隊、球季、球員、比較對象只放在這一節）=====
+        section("2　單一球隊深入看", "選一支球隊和一個球季；底下 2-1 球場圖、2-2 五大區對照")
         # 球隊按鈕放在獨立一整排，8 隊才排得下
         sh_team = pills("球隊（投籃位置資料只有八支冠軍隊）", ALL_TEAMS, "sh_team", default=ALL_TEAMS[0],
                         format_func=team_label)
-        c2, c3 = st.columns([3, 2])
         sh_tid = int(team_raw[team_raw["abbreviation"] == sh_team]["team_id"].iloc[0])
         champ_s = [s for s in shot_seasons if (s, sh_team) in CHAMP_SET]
+        c2, c4, c5 = st.columns([3, 3, 4])
         with c2:
             sh_season = st.selectbox(
                 "球季", shot_seasons, key=f"sh_season_{sh_team}",
                 index=shot_seasons.index(champ_s[0]) if champ_s else 0,
                 format_func=lambda s: s + ("　★ 奪冠" if (s, sh_team) in CHAMP_SET else ""))
-        with c3:
-            sh_type = TYPE_OPTIONS[seg("比賽類型", ["例行賽", "季後賽"], "sh_type")]
-        c4, c5 = st.columns([3, 4])
         with c4:
             vs = seg("和誰比較", ["聯盟平均", "另一季"], "sh_vs")
         with c5:
@@ -2488,6 +2626,7 @@ if PAGE == "投籃分布":
                 sh_pname = names[sh_pid]
                 shots_a = shots_a[shots_a["player_id"] == sh_pid]
         who = sh_pname or TEAM_ZH.get(sh_team, sh_team)
+        color = TEAM_COLORS.get(sh_team, ACCENT)
         if shots_a.empty:
             st.info(f"{team_label(sh_team)} {sh_season} {'季後賽' if sh_type == 'Playoffs' else '例行賽'}"
                     "沒有投籃紀錄（可能那季沒打進季後賽，或這一季還沒載入）。")
@@ -2516,7 +2655,6 @@ if PAGE == "投籃分布":
                 b_label = f"{sh_season_b} {who}" + ("★" if (sh_season_b, sh_team) in CHAMP_SET else "")
                 zb = zone_table(shots_to_zone_rows(shots_b)) if not shots_b.empty else pd.DataFrame()
             a_label = f"{sh_season} {who}" + ("★" if (sh_season, sh_team) in CHAMP_SET else "")
-            color = TEAM_COLORS.get(sh_team, ACCENT)
 
             # ---- 球場圖 ----
             def court_top(*ys, pad=30):
@@ -2607,6 +2745,7 @@ if PAGE == "投籃分布":
             # 和「另一季」比較時：兩張球場圖左右並排，一眼看出差在哪
             two_up = vs == "另一季" and not zb.empty
             if two_up:
+                section(f"2-1　球場圖：{a_label} vs {b_label}", "左右兩張用同一套規則，可以直接對照", level=2)
                 ca, cb = st.columns(2, gap="large")
                 if view == "每一次出手":
                     top2 = court_top(shots_a["loc_y"].quantile(0.99), shots_b["loc_y"].quantile(0.99), pad=15)
@@ -2651,15 +2790,15 @@ if PAGE == "投籃分布":
                     else:
                         fig = zone_fig(za, zb, colored=not zb.empty)
                         sub = f"圈越大＝出手越多；圈內數字是命中率；紫色＝比「{b_label}」準、藍色＝比較不準"
-                    section(f"{a_label} 出手位置", sub)
+                    section(f"2-1　{a_label} 出手位置", sub, level=2)
                     st.plotly_chart(fig, width="stretch")
 
             # ---- 五大區對照 ----
             with right:
                 ga = group_table(za)
                 gb = group_table(zb) if not zb.empty else None
-                section(f"五大區出手佔比：{a_short} vs {b_short}",
-                        f"每 100 次出手有幾次在這一區；彩色長條＝{a_label}、灰色長條＝{b_label}")
+                section(f"2-2　五大區出手佔比：{a_short} vs {b_short}",
+                        f"每 100 次出手有幾次在這一區；彩色長條＝{a_label}、灰色長條＝{b_label}", level=2)
                 fig = go.Figure()
                 if gb is not None:
                     fig.add_trace(go.Bar(y=GROUP_ORDER, x=gb["share"], orientation="h", name=b_label,
@@ -2719,40 +2858,18 @@ if PAGE == "投籃分布":
                          f"三分只要投 35% 就值 1.05 分。這就是球隊捨棄中距離的數學理由。")
             insight(lines, where=shot_slot)
 
-            # ---- 名詞小辭典：五大區在哪裡（1031-3）----
-            with st.expander("五大區是哪裡？（名詞小辭典）"):
-                g1, g2 = st.columns([2, 3], gap="large")
-                with g1:
-                    zf = go.Figure()
-                    for x_, y_, t_ in [(0, 12, "禁區籃下"), (0, 95, "油漆區"), (-150, 110, "中距離"),
-                                       (150, 110, "中距離"), (-236, 40, "底角<br>三分"), (236, 40, "底角<br>三分"),
-                                       (0, 280, "弧頂三分")]:
-                        zf.add_annotation(x=x_, y=y_, text=t_, showarrow=False,
-                                          font=dict(size=12, color=INK), bgcolor="rgba(255,255,255,0.85)")
-                    zf.add_shape(type="rect", x0=-80, y0=-47.5, x1=80, y1=142.5, line=dict(width=0),
-                                 fillcolor="rgba(124,58,237,0.10)", layer="below")
-                    zf.add_shape(type="circle", x0=-40, y0=-40, x1=40, y1=40, line=dict(width=0),
-                                 fillcolor="rgba(124,58,237,0.22)", layer="below")
-                    zf = court_axes(zf, top=310)
-                    zf.update_layout(height=300, showlegend=False)
-                    zf.add_trace(go.Scatter(x=[0], y=[0], mode="markers", hoverinfo="skip",
-                                            marker=dict(size=1, color="rgba(0,0,0,0)")))
-                    st.plotly_chart(zf, width="stretch", config={"displayModeBar": False, "staticPlot": True})
-                with g2:
-                    term_table(GROUP_ORDER + ["每次出手得分"],
-                               first_note="油漆區和禁區籃下都在籃框附近：<b>禁區籃下</b>只算最裡面的小半圓，"
-                                          "<b>油漆區</b>是長方形裡剩下的部分。")
+        # ===== 3 跨球季的變化（1031-2：折線、熱力圖、小球場並排合併成一節；不受第 2 節「這一季有沒有紀錄」影響）=====
+        st.divider()
+        slot3 = section(f"3　跨球季的變化：{sh_pname or team_label(sh_team)}（{sh_type_zh}）",
+                        "和第 2 節同一支球隊（選了球員就看球員），★ 是奪冠球季；"
+                        "折線＝某一區的出手佔比 vs 聯盟、熱力圖＝每季 × 每區一眼看完、小球場並排＝挑幾季放在一起比")
+        cross = seg("看法", ["折線", "熱力圖", "小球場並排"], "sh_cross")
+        zt = load_zone_team(sh_tid) if sh_pid is None else load_zone_player(sh_pid)
+        zl = load_zone_league()
+        view_file = "shot_zone_team" if sh_pid is None else "shot_zone_player"
 
-            # ---- 逐季趨勢（需要 shot_zone_team 檢視表）----
-            st.divider()
-            section(f"{sh_pname or team_label(sh_team)} 每季出手選擇 vs 聯盟",
-                    ("實線是球員（只含他在 8 支冠軍隊的球季）" if sh_pid is not None else "實線是球隊")
-                    + "、灰線是聯盟平均，★ 是奪冠球季；看冠軍那一季是不是「特別偏離」聯盟或自己的習慣")
+        if cross == "折線":
             trend_grp = seg("區域", ["中距離", "三分（底角＋弧頂）", "禁區籃下"], "sh_trend")
-            zt = load_zone_team(sh_tid) if sh_pid is None else load_zone_player(sh_pid)
-            zl = load_zone_league()
-            view_file = "shot_zone_team" if sh_pid is None else "shot_zone_player"
-
             def share_by_season(df):
                 d = df[(df["season_type"] == sh_type) & df["zone_basic"].isin(ZONE_ZH)].copy()
                 if d.empty:
@@ -2802,24 +2919,39 @@ if PAGE == "投籃分布":
                     fig.update_yaxes(title=f"{trend_grp}出手佔比", tickformat=".0%")
                     fig.update_layout(hovermode="x unified")
                     st.plotly_chart(style(fig, 360), width="stretch")
+                    # 發現（1031-2）：幾季比聯盟少、奪冠季差多少
+                    both = pd.concat([ts_team.rename("t"), ts_lg.rename("l")], axis=1).dropna()
+                    if not both.empty:
+                        dd = (both["t"] - both["l"]) * 100
+                        n_less = int((dd < 0).sum())
+                        lines = [f"<b>{trend_grp}：</b>{who}有資料的 {len(dd)} 季裡，"
+                                 f"有 {n_less} 季比同季聯盟少、{len(dd) - n_less} 季比較多"
+                                 f"（平均差 {dd.mean():+.1f} 個百分點）。"]
+                        cs_in = [s for s in cs if s in dd.index] if not ts_team.empty else []
+                        if cs_in:
+                            lines.append("奪冠季：" + "、".join(f"{s} {dd[s]:+.1f}" for s in cs_in) + " 個百分點"
+                                         + (f"；其他球季平均 {dd.drop(cs_in).mean():+.1f}。" if len(dd) > len(cs_in) else "。"))
+                        lines.append("讀法：彩色線在灰線下面＝這一區投得比聯盟少；★ 那幾季和旁邊的球季比，"
+                                     "看奪冠是不是伴隨著出手選擇的改變。")
+                        insight(lines, where=slot3)
                 else:
                     st.info("檢視表已建立，但還沒有這個選擇的資料。")
 
-            # ---- 多季對照：一眼看出出手選擇與命中區的變化 ----
-            st.divider()
-            mv_slot = section(f"{who} 多季對照：出手選擇與命中區有沒有改變？",
-                    "問題：奪冠那幾季的出手位置和準度，跟其他球季比起來有沒有明顯轉變？　"
-                    "讀法：橫著看一列（同一區）顏色有沒有變深變淺；★ 是奪冠球季")
+        if cross != "折線":
+            mv_slot = slot3
             if zt is None or zt.empty:
                 st.info(f"多季對照需要彙總檢視表：請到 Supabase SQL Editor 執行 docs/sql/2026-10-28_{view_file}.sql。")
                 if view_file in VIEW_ERRORS:
                     st.caption(f"錯誤訊息：{VIEW_ERRORS[view_file]}")
             else:
-                m1, m2 = st.columns([4, 3])
-                with m1:
-                    mv_metric = seg("顏色代表", ["出手佔比", "命中率", "命中率 vs 聯盟"], "mv_metric")
-                with m2:
-                    mv_level = seg("區域分法", ["五大區", "細分區域"], "mv_level")
+                if cross == "熱力圖":
+                    m1, m2 = st.columns([4, 3])
+                    with m1:
+                        mv_metric = seg("顏色代表", ["出手佔比", "命中率", "命中率 vs 聯盟"], "mv_metric")
+                    with m2:
+                        mv_level = seg("區域分法", ["五大區", "細分區域"], "mv_level")
+                else:
+                    mv_metric, mv_level = "出手佔比", "五大區"
 
                 def per_season(df):
                     """每季 × 每區：出手、命中、佔比（該季出手中佔幾成）、命中率"""
@@ -2866,124 +2998,126 @@ if PAGE == "投籃分布":
                     tm = zt[zt["season_type"] == sh_type].groupby("season")["team_id"].first().map(abbr_of)
                     xlab = [s + (" ★" if (s, tm.get(s, sh_team)) in CHAMP_SET else "") for s in seasons_mv]
 
-                    if col == "vs_lg":
-                        scale, zmin, zmax = [[0, "#3d74c9"], [0.5, "#ece9f2"], [1, "#7c3aed"]], -8, 8
-                    else:
-                        scale = [[i / (len(PURPLE_RAMP) - 1), c] for i, c in enumerate(PURPLE_RAMP)]
-                        zmin, zmax = None, None
-                    z = pv.values.astype(float)
-                    fig = go.Figure(go.Heatmap(
-                        z=z, x=xlab, y=keys, colorscale=scale, zmin=zmin, zmax=zmax, xgap=3, ygap=3,
-                        customdata=fga_pv.values,
-                        colorbar=dict(thickness=10, outlinewidth=0, len=0.8, tickfont=dict(color=INK_2),
-                                      tickformat=".0%" if col != "vs_lg" else None),
-                        hovertemplate="%{y}　%{x}<br>" + mv_metric + "：%{z:" + ffmt + "}"
-                                      + ("（百分點）" if col == "vs_lg" else "")
-                                      + "<br>出手 %{customdata:,.0f} 次<extra></extra>"))
-                    lo = pd.Series(z.ravel()).min()
-                    hi = pd.Series(z.ravel()).max()
-                    for i, k in enumerate(keys):
-                        for j, s in enumerate(xlab):
-                            v = z[i, j]
-                            if pd.isna(v):
-                                continue
-                            bright = (abs(v) > 5) if col == "vs_lg" else ((v - lo) / ((hi - lo) or 1) > 0.6)
-                            txt = f"{v:+.0f}" if col == "vs_lg" else f"{v:.0%}"
-                            fig.add_annotation(x=s, y=k, text=txt, showarrow=False,
-                                               font=dict(size=10.5, color="#ffffff" if bright else INK))
-                    fig.update_yaxes(autorange="reversed", showgrid=False)
-                    fig.update_xaxes(showgrid=False, side="top", type="category")
-                    st.plotly_chart(style(fig, 90 + 40 * len(keys)), width="stretch")
-                    st.caption("空白格＝那季沒有出手，或出手太少（命中率不可靠）所以不上色。"
-                               "「命中率 vs 聯盟」的數字是百分點：+5 代表比同季聯盟平均準 5 個百分點。")
-
-                    # 自動讀法：變化最大的區域
-                    if len(seasons_mv) >= 2:
-                        sh_pv = ms.pivot(index="key", columns="season", values="share").reindex(columns=seasons_mv)
-                        pct_pv = ms.assign(fg=ms["fg_pct"].where(~few)).pivot(index="key", columns="season",
-                                                                               values="fg").reindex(columns=seasons_mv)
-                        rng = (sh_pv.max(axis=1) - sh_pv.min(axis=1)).dropna()
-                        lines = []
-                        if not rng.empty:
-                            k = rng.idxmax()
-                            lines.append(f"<b>出手選擇變化最大：</b>{k}，佔比在 {sh_pv.loc[k].idxmin()} 最低"
-                                         f"（{sh_pv.loc[k].min():.0%}）、{sh_pv.loc[k].idxmax()} 最高"
-                                         f"（{sh_pv.loc[k].max():.0%}）。")
-                        prng = (pct_pv.max(axis=1) - pct_pv.min(axis=1)).dropna()
-                        if not prng.empty:
-                            k = prng.idxmax()
-                            lines.append(f"<b>命中率起伏最大：</b>{k}，從 {pct_pv.loc[k].min():.0%}"
-                                         f"（{pct_pv.loc[k].idxmin()}）到 {pct_pv.loc[k].max():.0%}"
-                                         f"（{pct_pv.loc[k].idxmax()}）。")
-                        lines.append("接著問「為什麼」：那一季換了教練、隊友，還是受傷？這就是從數據走到故事的一步。")
-                        insight(lines, where=mv_slot)
-
-                    # 小球場並排：選幾季放在一起看
-                    champ_cols = [s for s, lab in zip(seasons_mv, xlab) if "★" in lab]
-                    default_pick = (champ_cols + [s for s in seasons_mv if s not in champ_cols])[:3]
-                    default_pick = sorted(default_pick)
-                    pick = pills("並排比較的球季（最多 4 季）", seasons_mv, "mv_pick", default=default_pick,
-                                 multi=True, format_func=lambda s: s + (" ★" if s in champ_cols else ""))
-                    pick = sorted(pick)[:4]   # 不管點選順序，一律由舊到新排列
-                    if pick:
-                        # 各區在球場上的位置：用全隊檢視表的平均座標；沒有就用大概位置
-                        pos_src = load_zone_team(sh_tid)
-                        if pos_src is not None and not pos_src.empty and "avg_x" in pos_src.columns:
-                            ps = pos_src.assign(w=pd.to_numeric(pos_src["fga"], errors="coerce"),
-                                                ax=pd.to_numeric(pos_src["avg_x"], errors="coerce"),
-                                                ay=pd.to_numeric(pos_src["avg_y"], errors="coerce"))
-                            ps["wx"], ps["wy"] = ps["ax"] * ps["w"], ps["ay"] * ps["w"]
-                            pg = ps.groupby(["zone_basic", "zone_area"])[["wx", "wy", "w"]].sum()
-                            POS = {k: (r["wx"] / r["w"], r["wy"] / r["w"]) for k, r in pg.iterrows() if r["w"]}
-                            small_top = min(330, max(250, max((v[1] for v in POS.values()), default=270) + 30))
+                    if cross == "熱力圖":
+                        if col == "vs_lg":
+                            scale, zmin, zmax = [[0, "#3d74c9"], [0.5, "#ece9f2"], [1, "#7c3aed"]], -8, 8
                         else:
-                            POS = {}
-                            small_top = 300
-                        fine = zt[(zt["season_type"] == sh_type) & zt["zone_basic"].isin(ZONE_ZH)].copy()
-                        for c in ["fga", "fgm"]:
-                            fine[c] = pd.to_numeric(fine[c], errors="coerce")
-                        cols = st.columns(len(pick))
-                        for c_, s in zip(cols, pick):
-                            f = (fine[fine["season"] == s].groupby(["zone_basic", "zone_area"], as_index=False)
-                                 [["fga", "fgm"]].sum())
-                            f = f[[(a, b) in POS for a, b in zip(f["zone_basic"], f["zone_area"])]]
-                            if f.empty:
-                                c_.caption(f"{s}：沒有資料")
-                                continue
-                            f["x"] = [POS[(a, b)][0] for a, b in zip(f["zone_basic"], f["zone_area"])]
-                            f["y"] = [POS[(a, b)][1] for a, b in zip(f["zone_basic"], f["zone_area"])]
-                            f["share"] = f["fga"] / f["fga"].sum()
-                            f["fg"] = (f["fgm"] / f["fga"].where(f["fga"] > 0)).astype(float)
-                            lgs = zl[(zl["season"] == s) & (zl["season_type"] == sh_type)] if not zl.empty else zl
-                            if not lgs.empty:
-                                lz = zone_table(lgs)[["zone_basic", "zone_area", "fg_pct"]]
-                                f = f.merge(lz, on=["zone_basic", "zone_area"], how="left")
+                            scale = [[i / (len(PURPLE_RAMP) - 1), c] for i, c in enumerate(PURPLE_RAMP)]
+                            zmin, zmax = None, None
+                        z = pv.values.astype(float)
+                        fig = go.Figure(go.Heatmap(
+                            z=z, x=xlab, y=keys, colorscale=scale, zmin=zmin, zmax=zmax, xgap=3, ygap=3,
+                            customdata=fga_pv.values,
+                            colorbar=dict(thickness=10, outlinewidth=0, len=0.8, tickfont=dict(color=INK_2),
+                                          tickformat=".0%" if col != "vs_lg" else None),
+                            hovertemplate="%{y}　%{x}<br>" + mv_metric + "：%{z:" + ffmt + "}"
+                                          + ("（百分點）" if col == "vs_lg" else "")
+                                          + "<br>出手 %{customdata:,.0f} 次<extra></extra>"))
+                        lo = pd.Series(z.ravel()).min()
+                        hi = pd.Series(z.ravel()).max()
+                        for i, k in enumerate(keys):
+                            for j, s in enumerate(xlab):
+                                v = z[i, j]
+                                if pd.isna(v):
+                                    continue
+                                bright = (abs(v) > 5) if col == "vs_lg" else ((v - lo) / ((hi - lo) or 1) > 0.6)
+                                txt = f"{v:+.0f}" if col == "vs_lg" else f"{v:.0%}"
+                                fig.add_annotation(x=s, y=k, text=txt, showarrow=False,
+                                                   font=dict(size=10.5, color="#ffffff" if bright else INK))
+                        fig.update_yaxes(autorange="reversed", showgrid=False)
+                        fig.update_xaxes(showgrid=False, side="top", type="category")
+                        st.plotly_chart(style(fig, 90 + 40 * len(keys)), width="stretch")
+                        st.caption("空白格＝那季沒有出手，或出手太少（命中率不可靠）所以不上色。"
+                                   "「命中率 vs 聯盟」的數字是百分點：+5 代表比同季聯盟平均準 5 個百分點。")
+
+                        # 自動讀法：變化最大的區域
+                        if len(seasons_mv) >= 2:
+                            sh_pv = ms.pivot(index="key", columns="season", values="share").reindex(columns=seasons_mv)
+                            pct_pv = ms.assign(fg=ms["fg_pct"].where(~few)).pivot(index="key", columns="season",
+                                                                                   values="fg").reindex(columns=seasons_mv)
+                            rng = (sh_pv.max(axis=1) - sh_pv.min(axis=1)).dropna()
+                            lines = []
+                            if not rng.empty:
+                                k = rng.idxmax()
+                                lines.append(f"<b>出手選擇變化最大：</b>{k}，佔比在 {sh_pv.loc[k].idxmin()} 最低"
+                                             f"（{sh_pv.loc[k].min():.0%}）、{sh_pv.loc[k].idxmax()} 最高"
+                                             f"（{sh_pv.loc[k].max():.0%}）。")
+                            prng = (pct_pv.max(axis=1) - pct_pv.min(axis=1)).dropna()
+                            if not prng.empty:
+                                k = prng.idxmax()
+                                lines.append(f"<b>命中率起伏最大：</b>{k}，從 {pct_pv.loc[k].min():.0%}"
+                                             f"（{pct_pv.loc[k].idxmin()}）到 {pct_pv.loc[k].max():.0%}"
+                                             f"（{pct_pv.loc[k].idxmax()}）。")
+                            lines.append("接著問「為什麼」：那一季換了教練、隊友，還是受傷？這就是從數據走到故事的一步。")
+                            insight(lines, where=mv_slot)
+
+                    if cross == "小球場並排":
+                        # 小球場並排：選幾季放在一起看
+                        champ_cols = [s for s, lab in zip(seasons_mv, xlab) if "★" in lab]
+                        default_pick = (champ_cols + [s for s in seasons_mv if s not in champ_cols])[:3]
+                        default_pick = sorted(default_pick)
+                        pick = pills("並排比較的球季（最多 4 季）", seasons_mv, "mv_pick", default=default_pick,
+                                     multi=True, format_func=lambda s: s + (" ★" if s in champ_cols else ""))
+                        pick = sorted(pick)[:4]   # 不管點選順序，一律由舊到新排列
+                        if pick:
+                            # 各區在球場上的位置：用全隊檢視表的平均座標；沒有就用大概位置
+                            pos_src = load_zone_team(sh_tid)
+                            if pos_src is not None and not pos_src.empty and "avg_x" in pos_src.columns:
+                                ps = pos_src.assign(w=pd.to_numeric(pos_src["fga"], errors="coerce"),
+                                                    ax=pd.to_numeric(pos_src["avg_x"], errors="coerce"),
+                                                    ay=pd.to_numeric(pos_src["avg_y"], errors="coerce"))
+                                ps["wx"], ps["wy"] = ps["ax"] * ps["w"], ps["ay"] * ps["w"]
+                                pg = ps.groupby(["zone_basic", "zone_area"])[["wx", "wy", "w"]].sum()
+                                POS = {k: (r["wx"] / r["w"], r["wy"] / r["w"]) for k, r in pg.iterrows() if r["w"]}
+                                small_top = min(330, max(250, max((v[1] for v in POS.values()), default=270) + 30))
                             else:
-                                f["fg_pct"] = float("nan")
-                            f["d"] = ((f["fg"] - f["fg_pct"]) * 100).astype(float)
-                            fig = go.Figure(go.Scatter(
-                                x=f["x"], y=f["y"], mode="markers",
-                                marker=dict(size=8 + 34 * (f["share"] / 0.35).clip(upper=1) ** 0.5,
-                                            color=f["d"].fillna(0), cmin=-8, cmax=8,
-                                            colorscale=[[0, "#3d74c9"], [0.5, "#ece9f2"], [1, "#7c3aed"]],
-                                            line=dict(width=1, color="rgba(26,20,38,0.25)")),
-                                customdata=f[["zone_basic", "fga", "share", "fg", "d"]].values,
-                                hovertemplate="%{customdata[0]}<br>出手 %{customdata[1]:,.0f}（%{customdata[2]:.0%}）"
-                                              "<br>命中率 %{customdata[3]:.1%}（vs 聯盟 %{customdata[4]:+.1f}）"
-                                              "<extra></extra>", showlegend=False))
-                            fig.update_layout(shapes=court_shapes())
-                            fig.update_xaxes(range=[-255, 255], visible=False, fixedrange=True, constrain="domain")
-                            fig.update_yaxes(range=[-55, small_top], visible=False, fixedrange=True, constrain="domain",
-                                             scaleanchor="x", scaleratio=1)   # 每張小球場比例、大小都一樣
-                            star = " ★" if s in champ_cols else ""
-                            c_.markdown(f'<div class="section-sub" style="margin-left:0;text-align:center">'
-                                        f'<b style="color:#1a1426">{s}{star}</b>　出手 {int(f["fga"].sum()):,}</div>',
-                                        unsafe_allow_html=True)
-                            fig = style(fig, int(10 + 300 * (small_top + 55) / 510))
-                            fig.update_layout(margin=dict(l=0, r=0, t=0, b=0))
-                            c_.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
-                        st.caption("每個小球場同一套規則：圈越大＝那季在這區出手越多；紫色＝比同季聯盟準、藍色＝比較不準。"
-                                   "並排看，圈「變大變小」就是出手選擇的改變，「變紫變藍」就是命中區的改變。")
+                                POS = {}
+                                small_top = 300
+                            fine = zt[(zt["season_type"] == sh_type) & zt["zone_basic"].isin(ZONE_ZH)].copy()
+                            for c in ["fga", "fgm"]:
+                                fine[c] = pd.to_numeric(fine[c], errors="coerce")
+                            cols = st.columns(len(pick))
+                            for c_, s in zip(cols, pick):
+                                f = (fine[fine["season"] == s].groupby(["zone_basic", "zone_area"], as_index=False)
+                                     [["fga", "fgm"]].sum())
+                                f = f[[(a, b) in POS for a, b in zip(f["zone_basic"], f["zone_area"])]]
+                                if f.empty:
+                                    c_.caption(f"{s}：沒有資料")
+                                    continue
+                                f["x"] = [POS[(a, b)][0] for a, b in zip(f["zone_basic"], f["zone_area"])]
+                                f["y"] = [POS[(a, b)][1] for a, b in zip(f["zone_basic"], f["zone_area"])]
+                                f["share"] = f["fga"] / f["fga"].sum()
+                                f["fg"] = (f["fgm"] / f["fga"].where(f["fga"] > 0)).astype(float)
+                                lgs = zl[(zl["season"] == s) & (zl["season_type"] == sh_type)] if not zl.empty else zl
+                                if not lgs.empty:
+                                    lz = zone_table(lgs)[["zone_basic", "zone_area", "fg_pct"]]
+                                    f = f.merge(lz, on=["zone_basic", "zone_area"], how="left")
+                                else:
+                                    f["fg_pct"] = float("nan")
+                                f["d"] = ((f["fg"] - f["fg_pct"]) * 100).astype(float)
+                                fig = go.Figure(go.Scatter(
+                                    x=f["x"], y=f["y"], mode="markers",
+                                    marker=dict(size=8 + 34 * (f["share"] / 0.35).clip(upper=1) ** 0.5,
+                                                color=f["d"].fillna(0), cmin=-8, cmax=8,
+                                                colorscale=[[0, "#3d74c9"], [0.5, "#ece9f2"], [1, "#7c3aed"]],
+                                                line=dict(width=1, color="rgba(26,20,38,0.25)")),
+                                    customdata=f[["zone_basic", "fga", "share", "fg", "d"]].values,
+                                    hovertemplate="%{customdata[0]}<br>出手 %{customdata[1]:,.0f}（%{customdata[2]:.0%}）"
+                                                  "<br>命中率 %{customdata[3]:.1%}（vs 聯盟 %{customdata[4]:+.1f}）"
+                                                  "<extra></extra>", showlegend=False))
+                                fig.update_layout(shapes=court_shapes())
+                                fig.update_xaxes(range=[-255, 255], visible=False, fixedrange=True, constrain="domain")
+                                fig.update_yaxes(range=[-55, small_top], visible=False, fixedrange=True, constrain="domain",
+                                                 scaleanchor="x", scaleratio=1)   # 每張小球場比例、大小都一樣
+                                star = " ★" if s in champ_cols else ""
+                                c_.markdown(f'<div class="section-sub" style="margin-left:0;text-align:center">'
+                                            f'<b style="color:#1a1426">{s}{star}</b>　出手 {int(f["fga"].sum()):,}</div>',
+                                            unsafe_allow_html=True)
+                                fig = style(fig, int(10 + 300 * (small_top + 55) / 510))
+                                fig.update_layout(margin=dict(l=0, r=0, t=0, b=0))
+                                c_.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
+                            st.caption("每個小球場同一套規則：圈越大＝那季在這區出手越多；紫色＝比同季聯盟準、藍色＝比較不準。"
+                                       "並排看，圈「變大變小」就是出手選擇的改變，「變紫變藍」就是命中區的改變。")
 
 
 # ---------- 戰術使用：冠軍靠什麼戰術得分？ ----------
@@ -3054,10 +3188,92 @@ if PAGE == "戰術使用":
         pt_s = sorted(PT["season"].unique())
         pc, po = split_teams(sorted(pt_abbrs), pt_s[0], pt_s[-1])
         po = sorted(po, key=lambda a_: (a_ not in EXTRA_TEAMS, a_))   # 已載入球員數據的球隊排前面
+        # 比賽類型、看哪一端是整頁條件（1101-1）
+        k1_, k2_ = st.columns(2)
+        with k1_:
+            pl_type_zh = seg("比賽類型（整頁）", ["例行賽", "季後賽"], "pl_type")
+        with k2_:
+            side_zh = seg("看哪一端（整頁）", ["進攻", "防守"], "pl_side")
+        pl_type = TYPE_OPTIONS[pl_type_zh]
+        side = "offensive" if side_zh == "進攻" else "defensive"
+        is_off = side == "offensive"
+
+        # ===== 1 八位冠軍的共同點（先回答假設，不用選球隊；1101-1）=====
+        slot_pc = section(f"1　八位冠軍的共同點：每種戰術在聯盟排第幾？（{side_zh}）",
+                "每一欄是一位冠軍；格子裡的數字是聯盟排名（1 = 最好），顏色越深越前面；最右欄是八位冠軍的中位數")
+        rank_kind = seg("排名依據", ["效率（每回合得分）", "使用率（用得多不多）"], "pl_rank_kind")
+        rk_col = "rk_ppp" if rank_kind.startswith("效率") else "rk_use"
+        ch = champs[champs["season"].isin(PT["season"].unique())].sort_values("season")
+        cols, rows = [], {}
+        for _, c in ch.iterrows():
+            d = PT[(PT["team_id"] == c["team_id"]) & (PT["season"] == c["season"])
+                   & (PT["season_type"] == pl_type) & (PT["side"] == side)]
+            if d.empty:
+                continue
+            lab = f"{c['season']}<br>{c['abbreviation']}"
+            cols.append(lab)
+            rows[lab] = dict(zip(d["play_type"], d[rk_col]))
+        if not cols:
+            st.caption("目前沒有冠軍球季的戰術數據。")
+        else:
+            hm = pd.DataFrame(rows).reindex([p for p in PLAY_ORDER if p != "Misc"])
+            hm = hm.dropna(how="all")
+            hm["中位數"] = hm[cols].median(axis=1)
+            hm = hm.sort_values("中位數")
+            z = hm.values.astype(float)
+            ramp = PURPLE_RAMP[::-1]   # 排名數字越小（越好）顏色越深
+            fig = go.Figure(go.Heatmap(
+                z=z, x=list(hm.columns), y=[PLAY_ZH.get(p, p) for p in hm.index],
+                zmin=1, zmax=30, xgap=2, ygap=2, showscale=False,
+                colorscale=[[i / (len(ramp) - 1), c] for i, c in enumerate(ramp)],
+                hovertemplate="%{y}　%{x}<br>聯盟第 %{z:.0f} 名<extra></extra>"))
+            for i in range(z.shape[0]):
+                for j in range(z.shape[1]):
+                    if pd.notna(z[i, j]):
+                        fig.add_annotation(x=hm.columns[j], y=PLAY_ZH.get(hm.index[i], hm.index[i]),
+                                           text=f"{z[i, j]:.0f}", showarrow=False,
+                                           font=dict(size=11, color="#ffffff" if z[i, j] <= 8 else INK))
+            fig.update_yaxes(autorange="reversed", showgrid=False)
+            fig.update_xaxes(showgrid=False, side="top")
+            st.plotly_chart(style(fig, 90 + 42 * len(hm)), width="stretch")
+            strong = [PLAY_ZH.get(p, p) for p in hm.index[hm["中位數"] <= 10]]
+            how_read("橫著看一列，如果八位冠軍大多在前 10 名（深紫色），這個戰術就是「冠軍共同點」。"
+                       + (f"目前中位數在前 10 名的：{'、'.join(strong)}。" if strong else
+                          "目前沒有任何戰術的中位數在前 10 名：冠軍各有各的打法。")
+                       + "改成「使用率」，就能檢查假設：如果使用率排名分散、效率排名集中在前面，代表冠軍贏在效率。")
+            # 發現：每位冠軍的「效率排名中位數」是不是比「使用率排名中位數」前面
+            cmp_rows = []
+            for _, c in ch.iterrows():
+                d = PT[(PT["team_id"] == c["team_id"]) & (PT["season"] == c["season"]) & (PT["season_type"] == pl_type)
+                       & (PT["side"] == side) & (PT["play_type"] != "Misc")]
+                if len(d):
+                    cmp_rows.append((c["season"], c["abbreviation"], d["rk_ppp"].median(), d["rk_use"].median()))
+            if cmp_rows:
+                k_eff = sum(e < u for _, _, e, u in cmp_rows)
+                n_c = len(cmp_rows)
+                e_all = pd.Series([r_[2] for r_ in cmp_rows]).median()
+                u_all = pd.Series([r_[3] for r_ in cmp_rows]).median()
+                lines = [f"<b>效率比使用率前面：</b>{n_c} 位冠軍裡，有 {k_eff} 位的效率排名（中位數）比使用率排名前面"
+                         f"（全部冠軍：效率第 {e_all:.0f} 名、使用率第 {u_all:.0f} 名）。",
+                         (f"中位數在前 10 名的戰術：{'、'.join(strong)}。" if strong else
+                          "沒有任何戰術的中位數在前 10 名：冠軍各有各的打法。")]
+                chk = ((f"成立：{k_eff} / {n_c} 位冠軍贏在效率，不是用得特別多。" if k_eff > n_c / 2 else
+                        f"不成立：只有 {k_eff} / {n_c} 位冠軍的效率排名比使用率排名前面。")
+                       + "（排名都是同一季、同一種比賽、全聯盟 30 隊比。）")
+                insight(lines, where=slot_pc, check=chk)
+        with st.expander("這些戰術是什麼？（戰術小辭典）"):
+            term_table(["使用率", "每回合得分（PPP）"] + [PLAY_ZH[p] for p in PLAY_ORDER if p != "Misc"],
+                       first_note="「回合」＝拿到球到投進、失誤或被搶籃板為止的一次進攻；"
+                                  "NBA 把每一次進攻依「最後怎麼出手」分到下面其中一種戰術。")
+        st.divider()
+
+
+        # ===== 2 單一球隊深入看（球隊、球季只放在這一節）=====
+        section("2　單一球隊深入看", "選一支球隊和一個球季；底下 2-1 戰術地圖、2-2 戰術表、2-3 逐季變化")
         pl_team = team_picker_one(pc, po, "pl_team",
                                   f"奪冠球隊（{pt_s[0]}～{pt_s[-1]} 拿過冠軍）",
                                   f"其他球隊（戰術數據有全聯盟 30 隊）")
-        c2, c3, c4 = st.columns(3)
+        c2, _ = st.columns([1, 2])
         pl_tid = int(abbr2id[pl_team])
         pl_seasons = sorted(PT[PT["team_id"] == pl_tid]["season"].unique())[::-1]
         if not pl_seasons:   # 這隊完全沒有戰術數據：仍列出所有球季，下面會顯示「沒有資料」
@@ -3068,12 +3284,6 @@ if PAGE == "戰術使用":
                 "球季", pl_seasons, key=f"pl_season_{pl_team}",
                 index=pl_seasons.index(champ_pl[0]) if champ_pl else 0,
                 format_func=lambda s: s + ("　★ 奪冠" if (s, pl_team) in CHAMP_SET else ""))
-        with c3:
-            pl_type = TYPE_OPTIONS[seg("比賽類型", ["例行賽", "季後賽"], "pl_type")]
-        with c4:
-            side_zh = seg("看哪一端", ["進攻", "防守"], "pl_side")
-        side = "offensive" if side_zh == "進攻" else "defensive"
-        is_off = side == "offensive"
         color = TEAM_COLORS.get(pl_team, ACCENT)
 
         cur = PT[(PT["team_id"] == pl_tid) & (PT["season"] == pl_season)
@@ -3094,7 +3304,7 @@ if PAGE == "戰術使用":
             pl_slot = st.container()   # 結論放在圖的上面（先讀結論，再看圖）
             left, right = st.columns([5, 4], gap="large")
             with left:
-                section(f"{who} 戰術地圖（{side_zh}）",
+                section(f"2-1　{who} 戰術地圖（{side_zh}）", level=2, sub=
                         "橫軸：比聯盟多用還是少用；縱軸：比聯盟有效率還是沒效率；圈越大＝回合越多")
                 plot = cur[cur["play_type"] != "Misc"]
                 fig = go.Figure()
@@ -3126,8 +3336,8 @@ if PAGE == "戰術使用":
                                  title="每回合" + ("得分" if is_off else "少失") + "比聯盟多幾分")
                 st.plotly_chart(fig, width="stretch")
             with right:
-                section("每種戰術的使用率與效率",
-                        "長條＝使用率；排名是每回合" + ("得分" if is_off else "失分") + "在全聯盟的名次（1 = 最好）")
+                section("2-2　每種戰術的使用率與效率",
+                        "長條＝使用率；排名是每回合" + ("得分" if is_off else "失分") + "在全聯盟的名次（1 = 最好）", level=2)
                 tb = pd.DataFrame({
                     "戰術": cur["name"],
                     "使用率": [fmt(v, ".1%") for v in cur["poss_pct"]],
@@ -3140,11 +3350,6 @@ if PAGE == "戰術使用":
                 })
                 nice_table(tb, num_cols=list(tb.columns[1:]), signed_cols=["效率差"], bars={"使用率": "_bar"})
                 st.caption("效率差：正數＝比聯盟好（防守端已經反過來算：對手每回合少得幾分）。")
-            with st.expander("這些戰術是什麼？（戰術小辭典）"):
-                term_table(["使用率", "每回合得分（PPP）"] + [PLAY_ZH[p] for p in PLAY_ORDER if p != "Misc"],
-                           first_note="「回合」＝拿到球到投進、失誤或被搶籃板為止的一次進攻；"
-                                      "NBA 把每一次進攻依「最後怎麼出手」分到下面其中一種戰術。")
-
             # 自動摘要：最常用、最有效、最弱
             main = cur[(cur["play_type"] != "Misc") & (cur["poss_pct"] >= 0.04)]   # 太少用的戰術樣本小，不列入
             if not main.empty:
@@ -3160,55 +3365,10 @@ if PAGE == "戰術使用":
                     "讀法：如果圈大多落在「上方」而不是「右邊」，代表這支隊伍贏在效率，而不是打法特別不一樣。",
                 ])
 
-            # ===== 八位冠軍的共同點 =====
-            st.write("")
-            section(f"八位冠軍的共同點：每種戰術在聯盟排第幾？（{side_zh}）",
-                    "每一欄是一位冠軍；格子裡的數字是聯盟排名（1 = 最好），顏色越深越前面；最右欄是八位冠軍的中位數")
-            rank_kind = seg("排名依據", ["效率（每回合得分）", "使用率（用得多不多）"], "pl_rank_kind")
-            rk_col = "rk_ppp" if rank_kind.startswith("效率") else "rk_use"
-            ch = champs[champs["season"].isin(PT["season"].unique())].sort_values("season")
-            cols, rows = [], {}
-            for _, c in ch.iterrows():
-                d = PT[(PT["team_id"] == c["team_id"]) & (PT["season"] == c["season"])
-                       & (PT["season_type"] == pl_type) & (PT["side"] == side)]
-                if d.empty:
-                    continue
-                lab = f"{c['season']}<br>{c['abbreviation']}"
-                cols.append(lab)
-                rows[lab] = dict(zip(d["play_type"], d[rk_col]))
-            if not cols:
-                st.caption("目前沒有冠軍球季的戰術數據。")
-            else:
-                hm = pd.DataFrame(rows).reindex([p for p in PLAY_ORDER if p != "Misc"])
-                hm = hm.dropna(how="all")
-                hm["中位數"] = hm[cols].median(axis=1)
-                hm = hm.sort_values("中位數")
-                z = hm.values.astype(float)
-                ramp = PURPLE_RAMP[::-1]   # 排名數字越小（越好）顏色越深
-                fig = go.Figure(go.Heatmap(
-                    z=z, x=list(hm.columns), y=[PLAY_ZH.get(p, p) for p in hm.index],
-                    zmin=1, zmax=30, xgap=2, ygap=2, showscale=False,
-                    colorscale=[[i / (len(ramp) - 1), c] for i, c in enumerate(ramp)],
-                    hovertemplate="%{y}　%{x}<br>聯盟第 %{z:.0f} 名<extra></extra>"))
-                for i in range(z.shape[0]):
-                    for j in range(z.shape[1]):
-                        if pd.notna(z[i, j]):
-                            fig.add_annotation(x=hm.columns[j], y=PLAY_ZH.get(hm.index[i], hm.index[i]),
-                                               text=f"{z[i, j]:.0f}", showarrow=False,
-                                               font=dict(size=11, color="#ffffff" if z[i, j] <= 8 else INK))
-                fig.update_yaxes(autorange="reversed", showgrid=False)
-                fig.update_xaxes(showgrid=False, side="top")
-                st.plotly_chart(style(fig, 90 + 42 * len(hm)), width="stretch")
-                strong = [PLAY_ZH.get(p, p) for p in hm.index[hm["中位數"] <= 10]]
-                how_read("橫著看一列，如果八位冠軍大多在前 10 名（深紫色），這個戰術就是「冠軍共同點」。"
-                           + (f"目前中位數在前 10 名的：{'、'.join(strong)}。" if strong else
-                              "目前沒有任何戰術的中位數在前 10 名：冠軍各有各的打法。")
-                           + "改成「使用率」，就能檢查假設：如果使用率排名分散、效率排名集中在前面，代表冠軍贏在效率。")
-
             # ===== 奪冠前後：某一種戰術的逐季變化 =====
             st.write("")
-            section(f"{ALL_ZH.get(pl_team, pl_team)}的某一種戰術，逐季怎麼變？",
-                    "紫色直條是奪冠球季；看看奪冠那季是突然變強，還是一路累積上來")
+            section(f"2-3　{ALL_ZH.get(pl_team, pl_team)}的某一種戰術，逐季怎麼變？",
+                    "紫色直條是奪冠球季；看看奪冠那季是突然變強，還是一路累積上來", level=2)
             opts = [p for p in PLAY_ORDER if p != "Misc" and p in set(PT["play_type"])]
             default_p = cur[cur["play_type"] != "Misc"]["play_type"].iloc[0] if (cur["play_type"] != "Misc").any() else opts[0]
             pl_play = pills("戰術", opts, "pl_play", default=default_p, format_func=lambda p: PLAY_ZH.get(p, p))
@@ -3258,14 +3418,22 @@ if PAGE == "戰術使用":
             win = win.drop_duplicates(["season", "team_id"])
         champ_ids = set(zip(champs["season"], champs["team_id"]))   # {(球季, team_id)}
 
-        section(f"{pl_season} 各隊戰術比較（{side_zh}）",
-                "每一列是一支球隊，依例行賽勝率由高到低排；框起來的那一列是當季冠軍；最下面是聯盟平均")
+        section("3　延伸：全聯盟比較與奪冠方程式", "3-1 各隊戰術比較、3-2 奪冠方程式、3-3 檢驗方程式、3-4 單一戰術")
+        cmp_seasons = pt_s[::-1]
+        champ_of = {s_: a_ for s_, a_ in CHAMP_SET}
+        cmp_season = st.selectbox("3-1 的球季（只影響這一張圖）", cmp_seasons,
+                                  index=cmp_seasons.index(pl_season) if pl_season in cmp_seasons else 0,
+                                  key="pl_cmp_season",
+                                  format_func=lambda s: s + (f"　★ {ALL_ZH.get(champ_of[s], champ_of[s])}"
+                                                             if s in champ_of else ""))
+        section(f"3-1　{cmp_season} 各隊戰術比較（{side_zh}）",
+                "每一列是一支球隊，依例行賽勝率由高到低排；框起來的那一列是當季冠軍；最下面是聯盟平均", level=2)
         k1, k2 = st.columns(2)
         with k1:
             cmp_metric = seg("比較什麼", ["使用率", "每回合" + ("得分" if is_off else "失分"), "效率排名"], "pl_cmp_metric")
         with k2:
             cmp_scope = seg("球隊範圍", ["全聯盟 30 隊", "八支冠軍隊"], "pl_cmp_scope")
-        sea = PT[(PT["season"] == pl_season) & (PT["season_type"] == pl_type) & (PT["side"] == side)
+        sea = PT[(PT["season"] == cmp_season) & (PT["season_type"] == pl_type) & (PT["side"] == side)
                  & (PT["play_type"] != "Misc")]
         if cmp_scope == "八支冠軍隊":
             sea = sea[sea["team_id"].isin(set(team_raw["team_id"]))]
@@ -3275,11 +3443,11 @@ if PAGE == "戰術使用":
             col_key = {"使用率": "poss_pct", "效率排名": "rk_ppp"}.get(cmp_metric, "ppp")
             hm = sea.pivot_table(index="team_id", columns="play_type", values=col_key, aggfunc="first")
             hm = hm[[p for p in PLAY_ORDER if p in hm.columns]]
-            wp = win[win["season"] == pl_season].set_index("team_id")["win_pct"] if not win.empty else pd.Series(dtype=float)
+            wp = win[win["season"] == cmp_season].set_index("team_id")["win_pct"] if not win.empty else pd.Series(dtype=float)
             order = sorted(hm.index, key=lambda t: -(wp.get(t, float("nan")) if pd.notna(wp.get(t, float("nan"))) else -1))
             hm = hm.reindex(order)
             # 最下面加一列聯盟平均（全聯盟 30 隊，不受「球隊範圍」影響）
-            lg = PT_LG[(PT_LG["season"] == pl_season) & (PT_LG["season_type"] == pl_type) & (PT_LG["side"] == side)]
+            lg = PT_LG[(PT_LG["season"] == cmp_season) & (PT_LG["season_type"] == pl_type) & (PT_LG["side"] == side)]
             lg = lg.set_index("play_type")
             if col_key == "poss_pct":
                 hm.loc["lg"] = lg["lg_share"].reindex(hm.columns).values
@@ -3294,7 +3462,7 @@ if PAGE == "戰術使用":
                     continue
                 ab = id2abbr.get(t, str(t))
                 w_ = wp.get(t, float("nan"))
-                star = " ★" if (pl_season, t) in champ_ids else ""
+                star = " ★" if (cmp_season, t) in champ_ids else ""
                 labels.append(f"{ab} {ALL_ZH.get(ab, '')}{star}　{'' if pd.isna(w_) else format(w_, '.0%')}".strip())
             z = hm.values.astype(float)
             # 顏色：越深越「好」或越「多」。效率排名、防守失分是數字越小越好，所以色階反過來
@@ -3317,7 +3485,7 @@ if PAGE == "戰術使用":
                             fig.add_annotation(x=xs[j], y=labels[i], text=format(z[i, j], vfmt), showarrow=False,
                                                font=dict(size=10.5, color="#ffffff" if lvl > 0.6 else INK))
             for i, t in enumerate(hm.index):   # 冠軍那一列框起來
-                if (pl_season, t) in champ_ids:
+                if (cmp_season, t) in champ_ids:
                     fig.add_shape(type="rect", xref="x", yref="y", x0=-0.5, x1=len(xs) - 0.5, y0=i - 0.5, y1=i + 0.5,
                                   line=dict(color=ACCENT, width=2))
             fig.update_yaxes(autorange="reversed", showgrid=False)
@@ -3329,7 +3497,7 @@ if PAGE == "戰術使用":
         # ===== 奪冠方程式 =====
         st.write("")
         st.divider()
-        eq_slot = section("奪冠方程式：哪些戰術和贏球最有關？",
+        eq_slot = section("3-2　奪冠方程式：哪些戰術和贏球最有關？", level=2, sub=
                 "用全聯盟 30 隊、每一季的例行賽：每種戰術的「效率」和「使用率」，各自和球隊勝率的相關係數。"
                 "長條越長（越往右），代表這件事做得好的隊伍越會贏")
         with eq_slot:
@@ -3385,7 +3553,7 @@ if PAGE == "戰術使用":
                 ])
 
                 # ---- 方程式分數：用上面的相關係數當權重，替每支球隊打分數，看冠軍會不會排在前面 ----
-                chk_slot = section("檢驗方程式：用這個公式幫每隊打分數，冠軍會排第幾？",
+                chk_slot = section("3-3　檢驗方程式：用這個公式幫每隊打分數，冠軍會排第幾？", level=2, sub=
                         "方程式分數＝把進攻、防守各戰術的效率換成「比同季聯盟好多少」（標準分數），"
                         "再用上圖的效率相關係數當權重加權平均；只用相關係數大於 0 的戰術")
                 wts = corr.set_index(["side", "play_type"])["r_eff"].clip(lower=0)
@@ -3430,8 +3598,8 @@ if PAGE == "戰術使用":
                     ])
 
                 # ---- 單一戰術：效率 vs 勝率散點圖 ----
-                section("單一戰術：效率越好，勝率越高嗎？",
-                        "每個點是一支球隊的一個球季（例行賽）；灰色是其他球隊，彩色是冠軍")
+                section("3-4　單一戰術：效率越好，勝率越高嗎？",
+                        "每個點是一支球隊的一個球季（例行賽）；灰色是其他球隊，彩色是冠軍", level=2)
                 default_fp = cs.sort_values("r_eff", ascending=False)["play_type"].iloc[0]
                 fp = pills("戰術", list(cs.sort_values("r_eff", ascending=False)["play_type"]), "pl_formula_play",
                            default=default_fp, format_func=lambda p: PLAY_ZH.get(p, p))
@@ -4618,6 +4786,295 @@ if PAGE == "例行賽與季後賽":
                                       "要看的是冠軍的球星有沒有掉得比別人少。")
 
 
+# ---------- 得分穩定度：冠軍球星比較不會爆冷嗎？（2026-11-04 提出，11-05 重做）----------
+@st.cache_data(ttl=3600, show_spinner="讀取得分起伏彙總表中…")
+def _read_spread():
+    """讀 player_scoring_spread_mv（一位球員一隊一季一列）。讀不到會丟出錯誤，Streamlit 不會記住失敗的結果"""
+    return fetch_all("player_scoring_spread_mv", ["team_id", "season", "season_type", "player_id"])
+
+
+def load_spread():
+    try:
+        df = _read_spread()
+        return df if not df.empty else None
+    except Exception as e:
+        VIEW_ERRORS["player_scoring_spread_mv"] = f"{type(e).__name__}: {e}"[:300]
+        return None
+
+
+def scoring_spread(sp, players, season_type, n_star=3, min_reg=40, min_po=4):
+    """球星（例行賽場均得分隊內前 3、出賽至少 40 場）在指定比賽類型的每場得分起伏
+    cv＝標準差 ÷ 場均（起伏）；cv_fit＝同得分水準的平均起伏（直線）；cv_res＝實際 − 同水準，負數＝比較穩定"""
+    d = players[players["season_type"] == "Regular Season"].copy()
+    for c in ["gp", "pts"]:
+        d[c] = pd.to_numeric(d[c], errors="coerce")
+    d = d[d["gp"] >= min_reg]
+    d["ppg"] = d["pts"] / d["gp"]
+    d["rk"] = d.groupby(["season", "team_id"])["ppg"].rank(ascending=False, method="first")
+    stars = d[d["rk"] <= n_star][["season", "team_id", "player_id", "rk"]]
+    s = sp.copy()
+    for c in ["team_id", "player_id", "gp", "ppg", "sd_pts", "low_games", "high_games", "min_pts", "max_pts"]:
+        if c in s.columns:
+            s[c] = pd.to_numeric(s[c], errors="coerce")
+    for c in ["team_id", "player_id"]:
+        stars[c] = pd.to_numeric(stars[c], errors="coerce")
+    if "abbreviation" not in s.columns:
+        s = s.merge(team_raw[["team_id", "abbreviation"]].drop_duplicates(), on="team_id", how="left")
+    s = s[(s["season_type"] == season_type) & (s["gp"] >= (min_reg if season_type == "Regular Season" else min_po))]
+    s = s.merge(stars, on=["season", "team_id", "player_id"])
+    s = s[s["ppg"] > 0]
+    s["cv"] = s["sd_pts"] / s["ppg"]
+    s["low_rate"] = s["low_games"] / s["gp"]
+    s["high_rate"] = s["high_games"] / s["gp"] if "high_games" in s.columns else float("nan")
+    ok = s.dropna(subset=["cv", "ppg"])
+    if len(ok) >= 3:
+        x, y = ok["ppg"].astype(float), ok["cv"].astype(float)
+        b = ((x - x.mean()) * (y - y.mean())).sum() / (((x - x.mean()) ** 2).sum() or 1)
+        a = y.mean() - b * x.mean()
+    else:
+        a, b = float("nan"), 0.0
+    s["cv_fit"] = a + b * s["ppg"]
+    s["cv_res"] = s["cv"] - s["cv_fit"]
+    s["champion"] = [(s_, a_) in CHAMP_SET for s_, a_ in zip(s["season"], s["abbreviation"])]
+    s.attrs["line"] = (a, b)
+    return s
+
+
+if PAGE == "得分穩定度":
+    hypothesis("冠軍的球星是不是比較不會「爆冷」？每場得分的起伏，冠軍和其他球隊的球星差多少？",
+               "冠軍的頭號球星得分比較穩定：在同樣的場均得分下，每場得分的起伏比其他球隊的頭號球星小，"
+               "「低迷場」（得分不到自己平均的六成）也比較少。")
+    SP = load_spread()
+    if SP is None:
+        st.info("這一頁需要一張預先算好的彙總表（要看每一場的得分才能算起伏，網站一頁一頁讀幾十萬筆太慢）。"
+                "請到 Supabase SQL Editor 執行 docs/sql/2026-11-05_得分穩定度.sql，執行後按左側「重新讀取最新資料」。")
+        if "player_scoring_spread_mv" in VIEW_ERRORS:
+            st.caption(f"錯誤訊息（截圖給助教看）：{VIEW_ERRORS['player_scoring_spread_mv']}")
+    else:
+        sd_type_zh = seg("比賽類型（整頁）", ["例行賽", "季後賽"], "sd_type")
+        S = scoring_spread(SP, player_raw, TYPE_OPTIONS[sd_type_zh])
+        st.caption(f"目前用資料庫已載入球員逐場數據的 {S['abbreviation'].nunique()} 隊計算（每天自動增加 2 隊）；"
+                   "球星＝當季例行賽場均得分隊內前 3 名、出賽至少 40 場"
+                   + ("；季後賽至少打 4 場。" if sd_type_zh == "季後賽" else "。"))
+        S1 = S[S["rk"] == 1]
+        if S1.empty or not S1["champion"].any():
+            st.info("資料不足：還沒有冠軍頭號球星的得分起伏資料。")
+        else:
+            # ===== 1 冠軍頭號球星 vs 同得分水準 =====
+            slot1 = section(f"1　冠軍的頭號球星比同得分水準穩定嗎？（{sd_type_zh}）",
+                            "每個點是一位頭號球星的一季：灰點＝其他球隊、彩色星星＝冠軍，虛線＝同得分水準的平均起伏；"
+                            "在虛線下面＝比同水準穩定")
+            o_, c_ = S1[~S1["champion"]], S1[S1["champion"]]
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=o_["ppg"], y=o_["cv"], mode="markers", name="其他球隊的頭號球星",
+                                     marker=dict(size=7, color=DIM, opacity=0.8),
+                                     customdata=o_[["season", "abbreviation", "player_name"]].values,
+                                     hovertemplate="%{customdata[0]} %{customdata[1]} %{customdata[2]}<br>"
+                                                   "場均 %{x:.1f} 分｜起伏 %{y:.0%}<extra></extra>"))
+            a_, b_ = S.attrs.get("line", (float("nan"), 0))
+            xs = [float(S1["ppg"].min()), float(S1["ppg"].max())]
+            if pd.notna(a_):
+                fig.add_trace(go.Scatter(x=xs, y=[a_ + b_ * v for v in xs], mode="lines", name="同得分水準的平均",
+                                         line=dict(color=MUTED, width=1.6, dash="dash"), hoverinfo="skip"))
+            fig.add_trace(go.Scatter(x=c_["ppg"], y=c_["cv"], mode="markers+text", name="冠軍的頭號球星",
+                                     marker=dict(size=15, symbol="star", line=dict(width=1, color=SURFACE),
+                                                 color=[TEAM_COLORS.get(a, ACCENT) for a in c_["abbreviation"]]),
+                                     text=[f"{s[2:]} {p}" for s, p in zip(c_["season"], c_["player_name"])],
+                                     textposition="top center", textfont=dict(size=10.5, color=INK_2),
+                                     customdata=c_[["season", "abbreviation", "player_name", "cv_res"]].values,
+                                     hovertemplate="★ %{customdata[0]} %{customdata[1]} %{customdata[2]}<br>"
+                                                   "場均 %{x:.1f} 分｜起伏 %{y:.0%}（比同水準 %{customdata[3]:+.0%}）<extra></extra>"))
+            fig.update_xaxes(title="場均得分")
+            fig.update_yaxes(title="每場得分起伏（標準差 ÷ 場均）", tickformat=".0%")
+            fig.update_layout(legend=dict(orientation="h", y=1.06, x=0))
+            st.plotly_chart(style(fig, 440), width="stretch")
+            k1 = int((c_["cv_res"] < 0).sum())
+            a1 = k1 > len(c_) / 2
+            steady = c_.sort_values("cv_res").iloc[0]
+            lines = [f"<b>比同水準穩定：</b>{len(c_)} 位冠軍頭號球星裡，有 {k1} 位在虛線下面"
+                     f"（平均比同水準 {c_['cv_res'].mean() * 100:+.1f} 個百分點；其他球隊的頭號球星 {o_['cv_res'].mean() * 100:+.1f}）。",
+                     f"最穩定的是 {steady['season']} {steady['player_name']}（起伏 {steady['cv']:.0%}，"
+                     f"比同水準 {steady['cv_res'] * 100:+.1f}）。",
+                     "讀法：得分越多的人，起伏「自然」越小（場均 30 分差 6 分只是兩成），所以不能直接比高低，"
+                     "要看每個點在虛線的上面還是下面。"]
+            chk1 = ("前半成立" if a1 else "前半不成立") + f"：{k1} / {len(c_)} 位比同得分水準穩定。"
+            insight(lines, where=slot1, check=chk1)
+            with st.expander("這頁的名詞是什麼意思？（名詞小辭典）"):
+                term_table(["球星（本頁）", "得分起伏", "同得分水準", "低迷場", "爆發場"],
+                           first_note="起伏是用<b>每一場</b>的得分算的，所以只有球員逐場數據已載入的球隊才算得出來；"
+                                      "低迷場不知道是不是因為受傷或犯規提早退場。")
+
+            # ===== 2 低迷場：冠軍 vs 其他球隊 =====
+            st.divider()
+            slot2 = section(f"2　低迷場比較少嗎？（{sd_type_zh}）",
+                            "長條＝平均每 100 場有幾場是「低迷場」（得分不到自己平均的六成）；分頭號球星、第 2～3 號球星兩組；"
+                            "長條上是人數")
+            S["grp"] = S["champion"].map({True: "冠軍", False: "其他球隊"})
+            S["star"] = (S["rk"] == 1).map({True: "頭號球星", False: "第 2～3 號球星"})
+            G = S.dropna(subset=["low_rate"]).groupby(["star", "grp"])["low_rate"].agg(["mean", "size"]).reset_index()
+            fig = go.Figure()
+            for grp, colr in [("其他球隊", "#c9c3d6"), ("冠軍", ACCENT)]:
+                g_ = G[G["grp"] == grp].set_index("star").reindex(["頭號球星", "第 2～3 號球星"])
+                fig.add_trace(go.Bar(x=list(g_.index), y=g_["mean"], name=grp, marker_color=colr,
+                                     text=[("-" if pd.isna(v) else f"{v:.0%}（{int(n)} 人）") for v, n in zip(g_["mean"], g_["size"])],
+                                     textposition="outside", cliponaxis=False, textfont=dict(color=INK_2),
+                                     hovertemplate="%{x}（" + grp + "）<br>低迷場 %{y:.1%}<extra></extra>"))
+            rounded(fig)
+            fig.update_layout(barmode="group", bargap=0.35, legend=dict(orientation="h", y=1.08, x=0))
+            fig.update_yaxes(title="低迷場佔出賽場數", tickformat=".0%", rangemode="tozero")
+            st.plotly_chart(style(fig, 360), width="stretch", config={"displayModeBar": False})
+            lc = S1[S1["champion"]]["low_rate"].mean()
+            lo = S1[~S1["champion"]]["low_rate"].mean()
+            lines = [f"頭號球星的低迷場：冠軍平均每 100 場 {lc * 100:.1f} 場，其他球隊 {lo * 100:.1f} 場。"]
+            if len(o_) < 30:
+                lines.append(f"對照組只有 {len(o_)} 人（還沒載入全部 30 隊），先不要下結論；約 11/8 補完後會更可靠。")
+            chk2 = (("後半成立" if lc < lo else "後半不成立") + f"：冠軍頭號球星低迷場 {lc:.1%}、其他 {lo:.1%}。"
+                    if pd.notna(lc) and pd.notna(lo) else None)
+            insight(lines, where=slot2, check=chk2)
+
+            # ===== 3 明細 =====
+            st.divider()
+            section("3　冠軍頭號球星明細", "起伏＝標準差 ÷ 場均；比同水準＝起伏 − 同得分水準的平均（負數＝比較穩定）")
+            T = c_.sort_values("season")
+            nice_table(pd.DataFrame({
+                "球季": T["season"], "冠軍": [ALL_ZH.get(a, a) for a in T["abbreviation"]], "_key": T["abbreviation"],
+                "球員": T["player_name"], "場數": [f"{v:.0f}" for v in T["gp"]],
+                "場均": [f"{v:.1f}" for v in T["ppg"]], "標準差": [f"{v:.1f}" for v in T["sd_pts"]],
+                "起伏": [f"{v:.0%}" for v in T["cv"]], "比同水準": [f"{v * 100:+.1f}" for v in T["cv_res"]],
+                "低迷場": [f"{v:.0%}" for v in T["low_rate"]],
+                "爆發場": [fmt(v, ".0%") for v in T["high_rate"]],
+                "單場最低～最高": [f"{fmt(a, '.0f')}～{fmt(b, '.0f')}" for a, b in zip(T.get("min_pts", T["gp"] * float("nan")),
+                                                                      T.get("max_pts", T["gp"] * float("nan")))],
+            }), num_cols=("場數", "場均", "標準差", "起伏", "比同水準", "低迷場", "爆發場", "單場最低～最高"),
+                signed_cols=("比同水準",), dot_col="冠軍", colors=TEAM_COLORS)
+
+
+# ---------- 月份趨勢：冠軍是不是越打越好？（2026-11-05）----------
+MONTH_ORDER = ["10–11 月", "12 月", "1 月", "2 月", "3 月", "4 月起"]
+
+
+def month_cat(m):
+    """把月份併成 6 段：開季的 10、11 月合併；4 月以後（含 2019-20 復賽的 7、8 月）合併"""
+    if m in (10, 11):
+        return "10–11 月"
+    if m in (12, 1, 2, 3):
+        return f"{m} 月"
+    return "4 月起"
+
+
+def prep_month(d, strong=0.6):
+    """例行賽每一場：月份段、這一季的第幾場（前半季／後半季），以及這一隊這一季的整季勝率、是不是「其他強隊」"""
+    d = d[d["season_type"] == "Regular Season"].dropna(subset=["game_date"]).sort_values(["team_id", "season", "game_date"]).copy()
+    d["mcat"] = d["game_date"].dt.month.map(month_cat)
+    d["n"] = d.groupby(["team_id", "season"]).cumcount() + 1
+    d["n_all"] = d.groupby(["team_id", "season"])["n"].transform("max")
+    d["half"] = (d["n"] > d["n_all"] / 2).map({False: "前半季", True: "後半季"})
+    d["season_win"] = d.groupby(["team_id", "season"])["win"].transform("mean")
+    d["grp"] = "其他球隊"
+    d.loc[(~d["champion"]) & (d["season_win"] >= strong), "grp"] = "其他強隊"
+    d.loc[d["champion"], "grp"] = "冠軍"
+    return d[d["season"] != ALL_SEASONS[-1]]     # 本季還沒打完，前後半季比不了，先不列入
+
+
+if PAGE == "月份趨勢":
+    hypothesis("冠軍是不是「越打越好」？開季和季末的勝率差多少？",
+               "冠軍的後半季勝率比前半季高（季末衝刺、陣容磨合好了）；同樣強的其他球隊（整季勝率六成以上、沒奪冠）"
+               "沒有這種上升，甚至會下滑。")
+    TG = team_games_with_abbr()
+    if TG.empty:
+        st.info("尚未載入資料，請執行 python load_to_supabase.py（球隊逐場比賽還沒有寫進資料庫）")
+    else:
+        MO = prep_month(TG)
+        st.caption(f"目前用資料庫已載入比賽的 {MO['abbreviation'].nunique()} 隊、{MO['season'].nunique()} 季例行賽計算"
+                   "（每天自動增加 2 隊；本季還沒打完，先不列入）。")
+        # ===== 1 每個月的勝率 =====
+        slot1 = section("1　每個月的勝率：冠軍 vs 其他強隊",
+                        "紫線＝奪冠球季的冠軍、灰線＝其他強隊（整季勝率六成以上、沒奪冠）、虛線＝其他球隊；點旁是勝率")
+        g = MO.groupby(["grp", "mcat"]).agg(win=("win", "mean"), n=("win", "size")).reset_index()
+        fig = go.Figure()
+        for grp, colr, dash, w in [("其他球隊", "#c9c3d6", "dot", 1.8), ("其他強隊", "#8f889f", "solid", 2.4),
+                                   ("冠軍", ACCENT, "solid", 3.2)]:
+            sub = g[g["grp"] == grp].set_index("mcat").reindex(MONTH_ORDER)
+            fig.add_trace(go.Scatter(x=MONTH_ORDER, y=sub["win"], name=grp, mode="lines+markers+text" if grp != "其他球隊" else "lines+markers",
+                                     line=dict(color=colr, width=w, dash=dash), marker=dict(size=7, color=colr),
+                                     text=[fmt(v, ".0%") for v in sub["win"]], textposition="top center",
+                                     textfont=dict(size=10.5, color=INK_2),
+                                     customdata=sub["n"].fillna(0).astype(int),
+                                     hovertemplate=grp + "<br>%{x}：勝率 %{y:.1%}（%{customdata} 場）<extra></extra>"))
+        fig.update_xaxes(type="category", categoryorder="array", categoryarray=MONTH_ORDER)
+        fig.update_yaxes(title="勝率", tickformat=".0%")
+        fig.update_layout(legend=dict(orientation="h", y=1.08, x=0))
+        st.plotly_chart(style(fig, 380), width="stretch")
+        piv = g.pivot(index="grp", columns="mcat", values="win").reindex(columns=MONTH_ORDER)
+        lines = []
+        if "冠軍" in piv.index:
+            cm = piv.loc["冠軍"].dropna()
+            lines.append(f"<b>冠軍最強的月份：</b>{cm.idxmax()}（{cm.max():.0%}），最弱是 {cm.idxmin()}（{cm.min():.0%}）。")
+        if "其他強隊" in piv.index:
+            om = piv.loc["其他強隊"].dropna()
+            lines.append(f"其他強隊最強是 {om.idxmax()}（{om.max():.0%}）、最弱是 {om.idxmin()}（{om.min():.0%}）。")
+        lines.append("讀法：看紫線是不是越往右越高（越打越好），灰線是不是平的或往下。"
+                     "2011-12（停擺，12 月底才開季）、2019-20（3 月停賽、7 月泡泡復賽）、2020-21（12 月底開季）的月份和一般球季不同，"
+                     "所以第 2 節改用「這一季的前一半場次 vs 後一半場次」來比，比較公平。")
+        insight(lines, where=slot1)
+        with st.expander("這頁的名詞是什麼意思？（名詞小辭典）"):
+            term_table(["前半季／後半季", "其他強隊", "勝率變化（百分點）"],
+                       first_note="前後半季是用<b>這一季自己的場次</b>切一半（例如 82 場就是前 41 場、後 41 場），"
+                                  "不是用日期，所以縮短的球季也能比。")
+
+        # ===== 2 每一位冠軍：前半季 vs 後半季 =====
+        st.divider()
+        slot2 = section("2　每一位冠軍：前半季 → 後半季",
+                        "灰點＝前半季勝率、彩色點＝後半季勝率；彩色點在右邊＝越打越好；括號是後半季 − 前半季")
+        H = (MO.groupby(["season", "abbreviation", "grp", "half"])["win"].mean().unstack("half").reset_index())
+        H["d"] = (H["後半季"] - H["前半季"]) * 100
+        C = H[H["grp"] == "冠軍"].sort_values("season")
+        if C.empty:
+            st.info("資料庫裡還沒有冠軍球季的逐場比賽。")
+        else:
+            labels = [f"{s_} {ALL_ZH.get(a_, a_)}（{d_:+.0f}）" for s_, a_, d_ in zip(C["season"], C["abbreviation"], C["d"])]
+            fig = go.Figure()
+            for lab, (_, r_) in zip(labels, C.iterrows()):
+                fig.add_trace(go.Scatter(x=[r_["前半季"], r_["後半季"]], y=[lab, lab], mode="lines",
+                                         line=dict(color="#d9d3e6", width=3), showlegend=False, hoverinfo="skip"))
+            fig.add_trace(go.Scatter(x=C["前半季"], y=labels, mode="markers", name="前半季",
+                                     marker=dict(size=11, color="#b3adc2", line=dict(width=1, color=SURFACE)),
+                                     hovertemplate="%{y}<br>前半季 %{x:.1%}<extra></extra>"))
+            fig.add_trace(go.Scatter(x=C["後半季"], y=labels, mode="markers", name="後半季",
+                                     marker=dict(size=14, color=[TEAM_COLORS.get(a, ACCENT) for a in C["abbreviation"]],
+                                                 line=dict(width=1.5, color=SURFACE)),
+                                     hovertemplate="%{y}<br>後半季 %{x:.1%}<extra></extra>"))
+            fig.update_yaxes(type="category", autorange="reversed", showgrid=False)
+            fig.update_xaxes(title="勝率", tickformat=".0%", showgrid=True, gridcolor=GRID)
+            fig.update_layout(legend=dict(orientation="h", y=1.04, x=0))
+            st.plotly_chart(style(fig, 90 + 36 * len(C)), width="stretch", config={"displayModeBar": False})
+            O = H[H["grp"] == "其他強隊"].dropna(subset=["d"])
+            k_up = int((C["d"] > 0).sum())
+            c_mean, o_mean = C["d"].mean(), O["d"].mean() if len(O) else float("nan")
+            lines = [f"<b>越打越好：</b>{len(C)} 位冠軍裡，有 {k_up} 位的後半季勝率比前半季高"
+                     f"（平均 {c_mean:+.1f} 個百分點）。",
+                     (f"其他強隊（{len(O)} 個隊季）平均 {o_mean:+.1f} 個百分點，"
+                      + ("冠軍上升得比較多。" if c_mean > o_mean else "冠軍並沒有上升得比較多。"))
+                     if len(O) else "還沒有足夠的其他強隊可以比較。"]
+            if len(O) < 15:
+                lines.append(f"其他強隊只有 {len(O)} 個隊季（還沒載入全部 30 隊），先不要下結論；約 11/8 補完後會更可靠。")
+            chk = None
+            if len(O):
+                chk = (("前半成立" if k_up > len(C) / 2 else "前半不成立") + f"：{k_up} / {len(C)} 位冠軍後半季比較好；"
+                       + ("後半成立" if c_mean > o_mean and o_mean <= 1 else "後半不成立")
+                       + f"：其他強隊平均 {o_mean:+.1f}、冠軍 {c_mean:+.1f} 個百分點。")
+            insight(lines, where=slot2, check=chk)
+            with st.expander("看每一位冠軍的逐月勝率"):
+                M2 = MO[MO["grp"] == "冠軍"].groupby(["season", "abbreviation", "mcat"])["win"].mean().unstack("mcat")
+                M2 = M2.reindex(columns=MONTH_ORDER).reset_index().sort_values("season")
+                tb = pd.DataFrame({"球季": M2["season"], "冠軍": [ALL_ZH.get(a, a) for a in M2["abbreviation"]],
+                                   "_key": M2["abbreviation"]})
+                for m_ in MONTH_ORDER:
+                    tb[m_] = [fmt(v, ".0%") for v in M2[m_]]
+                nice_table(tb, num_cols=tuple(MONTH_ORDER), dot_col="冠軍", colors=TEAM_COLORS)
+                st.caption("「-」＝那個月沒有比賽（例如縮短的球季）。")
+
+
 # ---------- 自動結論：用資料算出一句話，放在圖的上面 ----------
 def _diff_txt(v, f):
     return f"{v * 100:+.1f} 個百分點" if "%" in f else f"{v:+.2f}"
@@ -5031,6 +5488,10 @@ RELATED = {
               ("例行賽與季後賽", "季後賽裡，球星的表現有沒有變")],
     "例行賽與季後賽": [("籤運與傷兵", "季後賽遇到的對手強不強"), ("球員", "看單一球員的逐季與逐場數據"),
                 ("主場與客場", "冠軍在季後賽客場打得如何")],
+    "得分穩定度": [("例行賽與季後賽", "季後賽裡，球星的平均表現有沒有變"), ("球員", "看單一球員的逐場得分"),
+              ("月份趨勢", "整隊的表現，季初和季末穩不穩")],
+    "月份趨勢": [("賽程與休息", "季末的背靠背多不多、累不累"), ("例行賽與季後賽", "越打越好，進了季後賽還在嗎"),
+             ("得分穩定度", "球星每場的起伏")],
     "球季趨勢": [("球隊 × 球季", "同一個指標，用熱力圖一次看完"), ("冠軍球季比較", "奪冠那季比平常強多少")],
     "球隊 × 球季": [("球季趨勢", "選幾隊看折線，變化更清楚"), ("冠軍球季比較", "★ 那幾格和其他球季差多少")],
     "冠軍球季比較": [("冠軍密碼", "冠軍在全聯盟排第幾"), ("球員", "奪冠那季是哪些球員撐起來的")],
@@ -5059,6 +5520,13 @@ SOURCES = {
     "例行賽與季後賽": ("player_season_stats（由 player_game_stats 加總）、champions", "2006-07 起；只限資料庫已載入球員逐場數據的球隊（每天增加 2 隊）",
                 "球星＝例行賽場均得分隊內前 3 名、出賽至少 40 場，季後賽至少 4 場；真實命中率＝得分 ÷［2 ×（投籃出手 ＋ 0.44 × 罰球出手）］；"
                 "變化＝季後賽 − 例行賽；季後賽只算同一隊（季中被交易的球員只算季後賽所在的那一隊）。"),
+    "得分穩定度": ("player_scoring_spread_mv（由 player_game_stats 每一場算好的彙總表）、player_season_stats、champions",
+              "2006-07 起；只限資料庫已載入球員逐場數據的球隊（每天增加 2 隊）",
+              "起伏＝每場得分的標準差 ÷ 場均；同得分水準＝所有頭號球星「起伏 vs 場均」的最小平方法直線；"
+              "低迷場＝得分不到自己這一季平均的六成；爆發場＝得分到自己平均的 1.5 倍以上；上場 0 分鐘的場次不算。"),
+    "月份趨勢": ("team_games（輸贏）、games（日期、球季、比賽類型）、champions", "只限資料庫已載入比賽的球隊（每天增加 2 隊）；例行賽；本季不列入",
+             "月份：10、11 月合併成「10–11 月」，4 月以後（含 2019-20 復賽的 7、8 月）合併成「4 月起」；"
+             "前半季／後半季＝依這一季自己的場次切一半；其他強隊＝整季勝率六成以上、沒有奪冠的隊季。"),
     "球季趨勢": ("team_season_stats（由 player_game_stats 加總）", "上方選的球隊、球季、比賽類型", "各項指標由整季加總後再算比例（例如三分命中率＝三分命中總數 ÷ 三分出手總數）。"),
     "球隊 × 球季": ("team_season_stats", "上方選的球隊、球季、比賽類型", "顏色由淺紫到深紫代表數值由低到高；★ 是奪冠球季。"),
     "冠軍球季比較": ("team_season_stats、champions", "上方選的球隊、球季、比賽類型", "奪冠球季的數值 − 同一隊其他球季的平均。"),
