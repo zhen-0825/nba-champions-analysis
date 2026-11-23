@@ -2402,9 +2402,12 @@ def render_pred_review(tg, season):
         st.plotly_chart(style(fig, 300), width="stretch")
 
     # 選一天回頭看
+    # 整季每一天都列出來（下拉選單），最新的在最上面；選項裡直接寫那天猜對幾場
     days = list(ds["game_date"][::-1])
-    pick = pills("回頭看哪一天的預測（美國時間）", days[:14], "pr_day", default=days[0],
-                 format_func=lambda d: pd.Timestamp(d).strftime("%m/%d") + ("　最新" if d == days[0] else ""))
+    acc_txt = {d: f"猜對 {int(r)}/{int(n)}" for d, r, n in zip(ds["game_date"], ds["right"], ds["n"])}
+    pick = st.selectbox(f"回頭看哪一天的預測（美國時間，本季共 {len(days)} 天）", days, index=0, key="pr_day_all",
+                        format_func=lambda d: f"{pd.Timestamp(d):%m/%d}（週{'一二三四五六日'[pd.Timestamp(d).weekday()]}）"
+                                              f"　{acc_txt.get(d, '')}" + ("　最新" if d == days[0] else ""))
     day = pd.Timestamp(pick)
     g = gd[gd["game_date"] == day].sort_values("conf", ascending=False)
     rows = []
@@ -2745,10 +2748,12 @@ if PAGE == "每日戰報":
         render_pred_review(tg, season)
         st.divider()
         section("比賽結果", "選一個比賽日，看比分、值得關注的球員、球隊隱憂與戰績榜")
+        # 整季每一個比賽日都列出來（下拉選單），最新的在最上面；選項裡直接寫那天打幾場
         dates = sorted(tg["game_date"].unique(), reverse=True)
-        labels = {d: pd.Timestamp(d).strftime("%m/%d") for d in dates[:10]}
-        pick = pills("比賽日（美國時間）", list(labels), "rc_day", default=dates[0],
-                     format_func=lambda d: labels[d] + ("　最新" if d == dates[0] else ""))
+        n_games = tg.groupby("game_date")["game_id"].nunique()
+        pick = st.selectbox(f"比賽日（美國時間，本季共 {len(dates)} 天）", dates, index=0, key="rc_day_all",
+                            format_func=lambda d: f"{pd.Timestamp(d):%m/%d}（週{'一二三四五六日'[pd.Timestamp(d).weekday()]}）"
+                                                  f"　{int(n_games.get(d, 0))} 場" + ("　最新" if d == dates[0] else ""))
         day = pd.Timestamp(pick)
         since = (day - pd.Timedelta(days=21)).strftime("%Y-%m-%d")
         pl = load_recap_players(season, since)
