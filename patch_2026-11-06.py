@@ -1,0 +1,55 @@
+"""
+2026-11-06 每日任務：把「贏球與輸球」頁加進你電腦裡的 app.py
+
+用法（在 VS Code 終端機，提示字元 (basketball) PS C:\\basketball_research> 不用複製）：
+    python patch_2026-11-06.py
+
+它會做的事：
+  1. 先把原本的 app.py 備份成 app_備份_2026-11-06.py
+  2. 在 PAGES 清單「球季趨勢」前面加一頁「贏球與輸球」（冠軍故事的最後一頁）
+  3. 在 RELATED 前面加上這一頁的程式；在 OWN_SOURCES 前面加上相關頁面與資料來源
+已經加過的話不會重複加。這個檔案不用上傳到 GitHub。
+"""
+import os
+import shutil
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+APP = os.path.join(HERE, "app.py")
+MARK = 'if PAGE == "贏球與輸球":'
+
+PAGE_ENTRY = '    ("冠軍故事", "贏球與輸球", "冠軍輸球時哪裡掉最多？",\n     "贏球場 vs 輸球場：命中率、失誤、籃板…哪一項差最多；每一位冠軍都是投不進就輸嗎？", set()),\n'
+BLOCK = '# ---------- 贏球與輸球：冠軍輸球那幾場，是哪一項數據掉最多？（2026-11-06）----------\nWL_METRICS = {   # 顯示名稱 → (欄位, 格式, 越高越好?)\n    "真實命中率": ("ts", ".1%", True),\n    "三分命中率": ("fg3_pct", ".1%", True),\n    "兩分命中率": ("fg2_pct", ".1%", True),\n    "罰球出手率": ("fta_rate", ".2f", True),\n    "失誤": ("tov", ".1f", False),\n    "進攻籃板": ("oreb", ".1f", True),\n    "防守籃板": ("dreb", ".1f", True),\n    "助攻": ("ast", ".1f", True),\n    "抄截": ("stl", ".1f", True),\n    "阻攻": ("blk", ".1f", True),\n    "犯規": ("pf", ".1f", False),\n}\nTERMS.update({\n    "贏球場 − 輸球場": ("同一隊、同一季，贏球那幾場的平均減掉輸球那幾場的平均", "失誤、犯規越少越好，所以反過來減，正數一樣代表「贏球時比較好」"),\n    "標準差（本頁）": ("這隊這一季每場數字「平常會上下跳多少」；差 1 個標準差＝差了一場正常的起伏那麼多", "把不同單位（%、次數）換成同一把尺，才能比哪一項掉最多"),\n    "真實命中率": ("把兩分、三分、罰球都算進去的命中率", "得分 ÷［2 ×（投籃出手 ＋ 0.44 × 罰球出手）］"),\n    "罰球出手率": ("每投 1 次籃，換到幾次罰球；越高代表越常切入、造犯規", "罰球出手 ÷ 投籃出手"),\n    "其他強隊": ("整季勝率六成以上、但那一季沒有奪冠的球隊", "和月份趨勢頁同一個定義"),\n})\nWL_SHOOT = {"真實命中率", "三分命中率", "兩分命中率"}\n\n\n@st.cache_data(ttl=900, show_spinner="讀取贏球場／輸球場的平均數據中…")\ndef load_wl_splits():\n    """team_wl_splits_mv（docs/sql/2026-11-06_贏球與輸球.sql 建立）；還沒建立就回傳 None"""\n    try:\n        return fetch_all("team_wl_splits_mv", ["team_id", "season", "season_type", "wl"])\n    except Exception:\n        return None\n\n\ndef prep_wl(df, season_type, strong=0.6):\n    """一隊一季一列：每項指標「贏球場平均 − 輸球場平均」換成幾個標準差（正數＝贏球時比較好）"""\n    d = df[df["season_type"] == season_type].copy()\n    num = ["games"] + [c for c, _, _ in WL_METRICS.values()] + [f"sd_{c}" for c, _, _ in WL_METRICS.values()]\n    for c in num:\n        d[c] = pd.to_numeric(d[c], errors="coerce")\n    keys = ["team_id", "abbreviation", "season"]\n    w = d[d["wl"] == "W"].set_index(keys)\n    l_ = d[d["wl"] == "L"].set_index(keys)\n    out = w[["games"]].rename(columns={"games": "n_w"}).join(l_[["games"]].rename(columns={"games": "n_l"}), how="inner")\n    for name, (c, _, up) in WL_METRICS.items():\n        out[f"w_{c}"], out[f"l_{c}"] = w[c], l_[c]\n        sd = w[f"sd_{c}"].where(w[f"sd_{c}"] > 0)\n        out[f"z_{c}"] = (w[c] - l_[c]) / sd * (1 if up else -1)\n    out = out.reset_index()\n    out = out[(out["n_w"] >= 5) & (out["n_l"] >= 5)]          # 贏或輸不到 5 場的球季，平均不可靠\n    out["win_pct"] = out["n_w"] / (out["n_w"] + out["n_l"])\n    out["champion"] = [(s_, a_) in CHAMP_SET for s_, a_ in zip(out["season"], out["abbreviation"])]\n    out["grp"] = "其他球隊"\n    out.loc[(~out["champion"]) & (out["win_pct"] >= strong), "grp"] = "其他強隊"\n    out.loc[out["champion"], "grp"] = "冠軍"\n    return out[out["season"] != ALL_SEASONS[-1]]                # 本季還沒打完\n\n\nif PAGE == "贏球與輸球":\n    hypothesis("冠軍輸球的那幾場，是哪一項數據掉最多？是投不進，還是失誤、籃板這類「打法亂掉」？",\n               "冠軍輸球時掉最多的是投籃命中（真實命中率、三分命中率），不是失誤或籃板；而且其他強隊也是一樣——輸球主要是手感，不是努力不夠。")\n    WL_RAW = load_wl_splits()\n    if WL_RAW is None or WL_RAW.empty:\n        st.info("尚未載入資料，請先到 Supabase → SQL Editor 執行 docs/sql/2026-11-06_贏球與輸球.sql"\n                "（建立 team_wl_splits_mv），再按左側「重新讀取最新資料」。")\n    else:\n        wl_type = seg("比賽類型", ["例行賽", "季後賽"], key="wl_type")\n        WL = prep_wl(WL_RAW, "Regular Season" if wl_type == "例行賽" else "Playoffs")\n        st.caption(f"目前用資料庫已載入球員逐場數據的 {WL[\'abbreviation\'].nunique()} 隊、{WL[\'season\'].nunique()} 季計算"\n                   "（每天自動增加 2 隊）；贏或輸不到 5 場的球季不列入。")\n        names = list(WL_METRICS)\n        if WL.empty or not WL["champion"].any():\n            st.info("這個條件下還沒有足夠的冠軍球季（季後賽冠軍輸球的場數常常不到 5 場，可以先看例行賽）。")\n        else:\n            # ===== 1. 哪一項掉最多 =====\n            slot1 = section("1\u3000冠軍輸球時，哪一項掉最多？",\n                            "長條＝贏球場平均 − 輸球場平均，換成「幾個標準差」，不同單位的數據才能放在一起比；越長代表輸球時掉越多。"\n                            "失誤、犯規是越少越好，已經反過來算（輸球時失誤變多，長條一樣往右）")\n            G = WL.groupby("grp")[[f"z_{WL_METRICS[n][0]}" for n in names]].mean()\n            G.columns = names\n            order = G.loc["冠軍"].sort_values().index.tolist()\n            fig = go.Figure()\n            for grp_, color in [("其他球隊", "#d9d4e3"), ("其他強隊", "#a59db5"), ("冠軍", ACCENT)]:\n                if grp_ in G.index:\n                    n_ = int((WL["grp"] == grp_).sum())\n                    fig.add_trace(go.Bar(y=order, x=G.loc[grp_, order], orientation="h", name=f"{grp_}（{n_} 季）",\n                                         marker_color=color,\n                                         hovertemplate="%{y}：贏球比輸球好 %{x:.2f} 個標準差<extra>" + grp_ + "</extra>"))\n            fig.add_vline(x=0, line=dict(color=INK_2, width=1))\n            fig.update_layout(barmode="group", bargap=0.25, legend=dict(traceorder="reversed"))\n            fig.update_xaxes(title="贏球場 − 輸球場（標準差；越大＝輸球時掉越多）")\n            rounded(fig)\n            st.plotly_chart(style(fig, 520), width="stretch")\n            ch = G.loc["冠軍"].sort_values(ascending=False)\n            top, second = ch.index[0], ch.index[1]\n            effort = [n for n in ["失誤", "進攻籃板"] if n in ch.index]\n            lines = [f"冠軍輸球時掉最多的是{top}（平均 {ch.iloc[0]:.2f} 個標準差），其次是{second}（{ch.iloc[1]:.2f}）。",\n                     "「努力型」數據掉得少：" + "、".join(f"{n} {ch[n]:.2f}" for n in effort) + "。" if effort else "",\n                     ("其他強隊掉最多的也是" + G.loc["其他強隊"].idxmax() + "。") if "其他強隊" in G.index else "",\n                     "讀法：防守籃板常常是「結果」不是原因——對手投不進，我們才搶得到防守籃板，所以它也會在贏球時比較多。"]\n            shoot_top = top in WL_SHOOT\n            same = "其他強隊" in G.index and G.loc["其他強隊"].idxmax() in WL_SHOOT\n            insight(lines, where=slot1, label="發現",\n                    check=("成立：冠軍輸球主要是投不進，其他強隊也一樣。" if shoot_top and same else\n                           "部分成立：冠軍輸球主要是投不進，但其他強隊掉最多的是別的項目。" if shoot_top else\n                           f"不成立：冠軍輸球時掉最多的是{top}，不是投籃命中。"))\n            with st.expander("名詞小辭典"):\n                term_table(["贏球場 − 輸球場", "標準差（本頁）", "真實命中率", "罰球出手率", "其他強隊"],\n                           first_note="只看自己隊的數據，不知道對手那一場打得多好；輸球可能是對手手感太好，不一定是自己變差。")\n\n            # ===== 2. 每一位冠軍都一樣嗎 =====\n            st.divider()\n            slot2 = section("2\u3000每一位冠軍都是這樣輸球的嗎？",\n                            "一列一位冠軍、一欄一項數據，顏色越深＝那一項輸球時掉越多；每一列框起來的是這位冠軍掉最多的那一項")\n            C = WL[WL["champion"]].sort_values("season")\n            zc = [f"z_{WL_METRICS[n][0]}" for n in order[::-1]]\n            Z = C[zc].to_numpy()\n            ylab = [f"{s_} {team_label(a_)}" for s_, a_ in zip(C["season"], C["abbreviation"])]\n            xlab = order[::-1]\n            fig = go.Figure(go.Heatmap(\n                z=Z, x=xlab, y=ylab, zmin=0, zmax=max(1.0, float(pd.Series(Z.ravel()).quantile(0.95))),\n                colorscale=[[i / (len(PURPLE_RAMP) - 1), c_] for i, c_ in enumerate(PURPLE_RAMP)], xgap=3, ygap=3,\n                text=[[f"{v:.1f}" if pd.notna(v) else "" for v in row] for row in Z], texttemplate="%{text}",\n                hovertemplate="%{y}<br>%{x}：贏球比輸球好 %{z:.2f} 個標準差<extra></extra>",\n                colorbar=dict(title="標準差", thickness=10)))\n            best = C[zc].idxmax(axis=1).map(lambda c_: xlab[zc.index(c_)])\n            for i, b in enumerate(best):\n                j = xlab.index(b)\n                fig.add_shape(type="rect", x0=j - 0.5, x1=j + 0.5, y0=i - 0.5, y1=i + 0.5,\n                              line=dict(color=INK, width=2))\n            fig.update_yaxes(autorange="reversed", type="category")\n            fig.update_xaxes(side="top", type="category")\n            st.plotly_chart(style(fig, 120 + 30 * len(C)), width="stretch")\n            cnt = best.value_counts()\n            n_shoot = int(best.isin(WL_SHOOT).sum())\n            insight(where=slot2, label="發現", lines=[\n                f"{len(C)} 位冠軍裡，有 {n_shoot} 位輸球時掉最多的是投籃命中（真實／三分／兩分命中率）。",\n                "掉最多的項目：" + "、".join(f"{k} {v} 位" for k, v in cnt.items()) + "。",\n                ("例外：" + "、".join([f"{ylab[i]}（{b}）" for i, b in enumerate(best) if b not in WL_SHOOT][:6])\n                 + ("…" if len(C) - n_shoot > 6 else "") + "。")\n                if n_shoot < len(C) else "",\n            ], check=("成立：大多數冠軍都是「投不進就輸」。" if n_shoot >= len(C) * 0.6 else\n                      "不成立：超過四成的冠軍，輸球時掉最多的不是投籃命中。"))\n\n            # ===== 3. 單一冠軍的實際數字 =====\n            st.divider()\n            section("3\u3000單一冠軍：贏球場 vs 輸球場的實際數字", "選一位冠軍，看每一項數據贏球時、輸球時各是多少")\n            pick = st.selectbox("冠軍球季", ylab[::-1], key="wl_pick")\n            r = C.iloc[ylab.index(pick)]\n            rows = []\n            for n in order[::-1]:\n                c_, f_, up = WL_METRICS[n]\n                rows.append({"數據": n, "贏球場": fmt(r[f"w_{c_}"], f_), "輸球場": fmt(r[f"l_{c_}"], f_),\n                             "差（標準差）": fmt(r[f"z_{c_}"], "+.2f"), "_z": min(max(r[f"z_{c_}"], 0) / 1.5, 1)})\n            st.caption(f"{pick}：贏 {int(r[\'n_w\'])} 場、輸 {int(r[\'n_l\'])} 場（{wl_type}）")\n            nice_table(pd.DataFrame(rows), num_cols=("贏球場", "輸球場", "差（標準差）"), bars={"差（標準差）": "_z"})\n'
+META = 'RELATED["贏球與輸球"] = [("冠軍密碼", "冠軍整季強在哪幾項（Q1 的 10 項指標）"),\n                    ("投籃分布", "輸球常常是投不進，那冠軍平常從哪裡出手"),\n                    ("例行賽與季後賽", "季後賽對手更強，球星的命中率會不會掉")]\nSOURCES["贏球與輸球"] = ("team_wl_splits_mv（由 player_game_stats 加總成全隊每場，再分贏球場／輸球場平均；"\n                     "docs/sql/2026-11-06_贏球與輸球.sql 建立）、champions",\n                     "2006-07 起；只限資料庫已載入球員逐場數據的球隊（每天增加 2 隊）；贏或輸不到 5 場的球季不列入；本季不列入",\n                     "差＝（贏球場平均 − 輸球場平均）÷ 這隊這季每場的標準差，失誤、犯規反過來算；"\n                     "其他強隊＝整季勝率六成以上、沒奪冠；只有自己隊的數據，不知道對手那一場的表現。")\n'
+
+
+def insert_before(text, anchor, new, name):
+    i = text.find(anchor)
+    if i < 0:
+        sys.exit(f"找不到「{name}」的位置（{anchor.strip()[:30]}…），app.py 沒有修改。請把這段訊息貼給 Claude。")
+    line_start = text.rfind("\n", 0, i) + 1
+    return text[:line_start] + new + text[line_start:]
+
+
+def main():
+    if not os.path.exists(APP):
+        sys.exit("找不到 app.py，請把這個檔案放在 C:\\basketball_research（和 app.py 同一個資料夾）再執行。")
+    text = open(APP, encoding="utf-8").read()
+    if MARK in text:
+        print("app.py 已經有「贏球與輸球」頁，不用再加。")
+        return
+    has_1105 = "月份趨勢" in text
+    text = insert_before(text, '("自由探索", "球季趨勢"', PAGE_ENTRY, "PAGES 清單")
+    text = insert_before(text, "RELATED = {", BLOCK + "\n\n", "RELATED")
+    text = insert_before(text, "OWN_SOURCES = {", META, "OWN_SOURCES")
+    compile(text, "app.py", "exec")          # 先檢查語法，沒問題才寫回去
+    shutil.copy(APP, os.path.join(HERE, "app_備份_2026-11-06.py"))
+    open(APP, "w", encoding="utf-8").write(text)
+    print("完成：已加入「贏球與輸球」頁。原本的檔案備份在 app_備份_2026-11-06.py")
+    if not has_1105:
+        print("提醒：這份 app.py 裡沒有「月份趨勢」頁，看起來不是 11/05 每日任務那一份。"
+              "如果你想保留 11/05 的內容，請先換成 11/05 的 app.py，再執行一次這個檔案。")
+
+
+if __name__ == "__main__":
+    main()

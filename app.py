@@ -838,6 +838,10 @@ PAGES = [
      "每場得分的起伏：冠軍頭號球星和同得分水準的球員比，是不是比較穩定、低迷場比較少。", set()),
     ("冠軍故事", "月份趨勢", "冠軍是不是越打越好？",
      "每個月的勝率、前半季 vs 後半季：冠軍和同樣強的其他球隊，誰在季末比較強。", set()),
+    ("冠軍故事", "贏球與輸球", "冠軍輸球時哪裡掉最多？",
+     "贏球場 vs 輸球場：命中率、失誤、籃板…哪一項差最多；每一位冠軍都是投不進就輸嗎？", set()),
+    ("冠軍故事", "防守端", "冠軍的防守強在哪裡？",
+     "讓對手投不準、逼失誤、還是搶籃板？冠軍在每一項防守排聯盟第幾，哪一項最影響防守好壞。", set()),
     ("自由探索", "球季趨勢", "各隊一路怎麼變化？",
      "選一個指標，看各隊 20 季的折線；可聚焦幾支球隊，其他變灰。", {"team", "season", "type", "metric"}),
     ("自由探索", "球隊 × 球季", "哪隊在哪季特別突出？",
@@ -1814,10 +1818,16 @@ def graded_games(tg, preds):
     """把存下的預測和實際比分對起來：猜對沒、比分差多少"""
     if preds.empty:
         return pd.DataFrame()
-    t = tg[["game_id", "is_home", "pts", "abbreviation"]].copy()
-    t["is_home"] = t["is_home"].astype(bool)
-    home = t[t["is_home"]].set_index("game_id")
-    away = t[~t["is_home"]].set_index("game_id")
+    t = tg[[c for c in ["game_id", "is_home", "pts", "abbreviation", "matchup"] if c in tg]].copy()
+    # 主客標示：空白（None）一律先當成 False，不能直接 astype(bool)
+    t["is_home"] = t["is_home"].map(lambda v: str(v).strip().lower() in ("true", "t", "1"))
+    bad = t.groupby("game_id")["is_home"].transform("sum") != 1    # 這場不是「剛好一個主隊」
+    if bad.any() and "matchup" in t:
+        host = t["matchup"].astype(str).str.extract(r"@\s*(\w+)")[0]   # 「LAL @ UTA」→ UTA 是主隊
+        host = host.groupby(t["game_id"]).transform("first")
+        t.loc[bad, "is_home"] = t.loc[bad, "abbreviation"] == host[bad]
+    home = t[t["is_home"]].drop_duplicates("game_id").set_index("game_id")    # 每場只留一列，避免對答案時重複
+    away = t[~t["is_home"]].drop_duplicates("game_id").set_index("game_id")
     df = preds[preds["game_id"].isin(home.index) & preds["game_id"].isin(away.index)].copy()
     if df.empty:
         return df
@@ -5135,6 +5145,254 @@ def champ_findings(cr, ts, col, f, name):
 
 
 # ---------- 1. 球季趨勢 ----------
+# ---------- 防守端：冠軍的防守強在哪裡？（2026-11-09 新增）----------
+# 只用 league_team_seasons（全聯盟 30 隊每季，本來就有對手數據），不需要新的 SQL
+DEF_ITEMS = {  # 名稱: (欄位, 數值越高越好?, 格式)
+    "防守效率": ("def_rating", False, "num1"),
+    "對手有效命中率": ("opp_efg", False, "pct"),
+    "對手三分出手比例": ("opp_3par", False, "pct"),
+    "對手三分命中率": ("opp_3p", False, "pct"),
+    "逼對手失誤率": ("forced_tov", True, "pct"),
+    "防守籃板率": ("dreb_pct", True, "pct"),
+    "抄截（每 100 回合）": ("stl100", True, "num1"),
+    "阻攻（每 100 回合）": ("blk100", True, "num1"),
+}
+DEF_FACTORS = [n for n in DEF_ITEMS if n != "防守效率"]   # 防守效率是「總成績」，其他是「拆開來的原因」
+TERMS.update({
+    "對手有效命中率": ("對手每次出手的命中率，三分球多算半顆（因為多 1 分），數字越低＝防守讓對手投得越差",
+                 "（對手命中 ＋ 0.5 × 對手三分命中）÷ 對手出手"),
+    "對手三分出手比例": ("對手全部出手中三分球佔幾成；越低＝越不讓對手投三分", "對手三分出手 ÷ 對手出手"),
+    "對手三分命中率": ("對手三分球投進的比例；越低＝對手三分投不進", "對手三分命中 ÷ 對手三分出手"),
+    "逼對手失誤率": ("每 100 個防守回合，逼出對手幾次失誤（抄截、走步、出界…）", "對手失誤 ÷ 防守回合"),
+    "防守回合": ("對手進攻了幾次；網站用 NBA 官方的防守效率反推，不另外估計", "對手得分 ÷ 防守效率 × 100"),
+    "聯盟排名（本頁）": ("同一季例行賽 30 隊裡排第幾，1＝防守這一項最好（對手數字越低越好的項目，最低是第 1）", "每一季各自排名，不同年代才能比"),
+})
+
+
+def prep_defense(lg):
+    """全聯盟每隊每季（例行賽）的防守項目＋同季聯盟排名＋和同季平均的差"""
+    d = lg[lg["season_type"] == "Regular Season"].copy()
+    num = ["gp", "w", "stl", "blk", "dreb_pct", "def_rating",
+           "opp_pts", "opp_fgm", "opp_fga", "opp_fg3m", "opp_fg3a", "opp_tov"]
+    for c in num:
+        d[c] = pd.to_numeric(d[c], errors="coerce") if c in d else float("nan")
+    d = d[d["opp_fga"] > 0].copy()
+    if d.empty:
+        return d
+    d["poss"] = d["opp_pts"] / d["def_rating"].where(d["def_rating"] > 0) * 100   # 防守回合（官方防守效率反推）
+    d["opp_efg"] = (d["opp_fgm"] + 0.5 * d["opp_fg3m"]) / d["opp_fga"]
+    d["opp_3par"] = d["opp_fg3a"] / d["opp_fga"]
+    d["opp_3p"] = d["opp_fg3m"] / d["opp_fg3a"].where(d["opp_fg3a"] > 0)
+    d["forced_tov"] = d["opp_tov"] / d["poss"]
+    d["stl100"] = d["stl"] / d["poss"] * 100
+    d["blk100"] = d["blk"] / d["poss"] * 100
+    if d["dreb_pct"].max() > 1.5:          # 保險絲：百分比存成 75 而不是 0.75 時
+        d["dreb_pct"] = d["dreb_pct"] / 100
+    d["w_pct"] = d["w"] / d["gp"].where(d["gp"] > 0)
+    for name, (col, hb, _) in DEF_ITEMS.items():
+        d[f"rk_{col}"] = d.groupby("season")[col].rank(ascending=not hb, method="min")
+        # 和同季平均的差；「越低越好」的項目乘 −1，讓正數永遠＝比聯盟好
+        d[f"g_{col}"] = (d[col] - d.groupby("season")[col].transform("mean")) * (1 if hb else -1)
+    champ_ids = set(zip(champs["season"], champs["team_id"]))
+    d["champion"] = [(s_, t_) in champ_ids for s_, t_ in zip(d["season"], d["team_id"])]
+    return d[d["season"].isin(set(champs["season"]))]   # 只留已經有冠軍的球季（本季還沒打完，不列入）
+
+
+def def_show(v, kind):
+    if pd.isna(v):
+        return "-"
+    return f"{v * 100:.1f}%" if kind == "pct" else f"{v:.1f}"
+
+
+if PAGE == "防守端":
+    hypothesis("冠軍的防守強在哪裡？是讓對手投不準、逼對手失誤，還是把籃板搶下來？",
+               "冠軍防守最一致的強項是「讓對手投不準」（對手有效命中率排聯盟前 10），不是逼失誤或搶籃板；"
+               "三分也一樣：冠軍不一定讓對手少投三分，而是讓對手三分投不進。")
+    DF = prep_defense(league) if not league.empty else pd.DataFrame()
+    if DF.empty:
+        st.info("尚未載入資料，請執行 python load_to_supabase.py --only league（全聯盟每季數據與對手數據還沒有寫進資料庫）")
+    else:
+        DCH = DF[DF["champion"]].sort_values("season")
+        st.caption(f"全聯盟 30 隊的例行賽數據（{DF['season'].min()}～{DF['season'].max()}，共 {len(DCH)} 位冠軍）；"
+                   "排名都是同一季 30 隊裡排第幾，1＝這一項防守最好。")
+        if DCH.empty:
+            st.info("資料不足：全聯盟數據裡還沒有冠軍球季。")
+        else:
+            # ===== 1. 冠軍在每一項防守排第幾 =====
+            slot1 = section("1　冠軍在每一項防守排聯盟第幾？",
+                            "長條＝排進聯盟前 10 的冠軍佔幾成，越長越是冠軍的共同點；右邊數字是排名中位數。"
+                            "最上面的「防守效率」是總成績，下面 7 項是拆開來的原因")
+            rows = []
+            for name in DEF_ITEMS:
+                r = DCH[f"rk_{DEF_ITEMS[name][0]}"].dropna()
+                rows.append({"name": name, "top10": (r <= 10).mean() if len(r) else float("nan"),
+                             "med": r.median() if len(r) else float("nan"), "n": len(r)})
+            S1 = pd.DataFrame(rows)
+            S1 = pd.concat([S1[S1["name"] == "防守效率"],
+                            S1[S1["name"] != "防守效率"].sort_values("top10", ascending=False)])
+            fig = go.Figure(go.Bar(
+                x=S1["top10"], y=S1["name"], orientation="h",
+                marker_color=[INK_2 if n == "防守效率" else ACCENT for n in S1["name"]],
+                text=[f"中位數第 {m:.0f} 名" if pd.notna(m) else "-" for m in S1["med"]],
+                textposition="outside", cliponaxis=False, textfont=dict(color=INK_2),
+                customdata=S1[["n"]].values,
+                hovertemplate="%{y}<br>排進前 10 的冠軍：%{x:.0%}（共 %{customdata[0]} 位）<extra></extra>"))
+            rounded(fig)
+            fig.update_yaxes(type="category", autorange="reversed", showgrid=False)
+            fig.update_xaxes(title="排進聯盟前 10 的冠軍比例", tickformat=".0%", range=[0, 1.18],
+                             showgrid=True, gridcolor=GRID)
+            st.plotly_chart(style(fig, 70 + 42 * len(S1)), width="stretch", config={"displayModeBar": False})
+            with st.expander("這頁的名詞是什麼意思？（名詞小辭典）"):
+                term_table(["防守效率", "對手有效命中率", "對手三分出手比例", "對手三分命中率", "逼對手失誤率",
+                            "防守籃板率", "防守回合", "聯盟排名（本頁）"],
+                           first_note="這一頁只比「整季平均」：league_team_seasons 只有對手的得分、出手、三分、失誤，"
+                                      "沒有對手罰球，所以「讓對手少上罰球線」這一項目前算不出來。")
+            fac = S1[S1["name"] != "防守效率"].dropna(subset=["top10"])
+            best = fac.iloc[0] if len(fac) else None
+            de = S1[S1["name"] == "防守效率"].iloc[0]
+            lines = []
+            if best is not None:
+                lines.append(f"冠軍防守最一致的強項是<b>{best['name']}</b>："
+                             f"{best['top10']:.0%} 的冠軍排進聯盟前 10（中位數第 {best['med']:.0f} 名）。")
+            lines.append(f"總成績「防守效率」有 {de['top10']:.0%} 的冠軍排進前 10（中位數第 {de['med']:.0f} 名）。")
+            efg = S1.set_index("name").loc["對手有效命中率"]
+            tov = S1.set_index("name").loc["逼對手失誤率"]
+            reb = S1.set_index("name").loc["防守籃板率"]
+            check = None
+            if pd.notna(efg["top10"]):
+                if best is not None and best["name"] == "對手有效命中率":
+                    verdict = "成立"
+                elif efg["top10"] > max(tov["top10"], reb["top10"]):
+                    verdict = "部分成立（比逼失誤、搶籃板一致，但不是最一致的一項）"
+                else:
+                    verdict = "不成立"
+                check = (f"前半句{verdict}：對手有效命中率 {efg['top10']:.0%} 排前 10，"
+                         f"逼對手失誤率 {tov['top10']:.0%}、防守籃板率 {reb['top10']:.0%}。")
+            insight(lines, where=slot1, check=check)
+
+            # ===== 2. 交叉驗證：哪一項最影響防守效率（全聯盟）=====
+            st.divider()
+            slot2 = section("2　放到全聯盟看：哪一項最影響防守好壞？",
+                            "每一項「比同季平均好多少」和「防守效率比同季平均好多少」的相關係數；用全聯盟每隊每季算，不只冠軍。"
+                            "長條越長，代表這一項做得好，整體防守就越好")
+            rr = []
+            for name in DEF_FACTORS:
+                col = DEF_ITEMS[name][0]
+                x_ = DF[[f"g_{col}", "g_def_rating"]].dropna()
+                rr.append({"name": name, "r": x_[f"g_{col}"].corr(x_["g_def_rating"]) if len(x_) > 10 else float("nan"),
+                           "n": len(x_)})
+            R2 = pd.DataFrame(rr).sort_values("r", ascending=False)
+            fig = go.Figure(go.Bar(
+                x=R2["r"], y=R2["name"], orientation="h",
+                marker_color=[ACCENT if (pd.notna(v) and v >= 0.3) else "#c9c3d6" for v in R2["r"]],
+                text=[f"r = {v:+.2f}" if pd.notna(v) else "-" for v in R2["r"]],
+                textposition="outside", cliponaxis=False, textfont=dict(color=INK_2),
+                hovertemplate="%{y}<br>和防守效率的相關係數 %{x:+.2f}<extra></extra>"))
+            fig.add_vline(x=0, line=dict(color=MUTED, width=1))
+            rounded(fig)
+            fig.update_yaxes(type="category", autorange="reversed", showgrid=False)
+            fig.update_xaxes(title="相關係數 r（正數＝這一項好，防守效率也好）", range=[-0.45, 1.15],
+                             showgrid=True, gridcolor=GRID)
+            st.plotly_chart(style(fig, 70 + 42 * len(R2)), width="stretch", config={"displayModeBar": False})
+            top_r = R2.dropna(subset=["r"])
+            lines = []
+            if len(top_r):
+                t_ = top_r.iloc[0]
+                lines.append(f"全聯盟來看，和防守好壞最有關的是<b>{t_['name']}</b>（r = {t_['r']:+.2f}，"
+                             f"{int(t_['n'])} 個隊季）。")
+                strong = [n for n, v in zip(top_r["name"], top_r["r"]) if v >= 0.3]
+                if strong:
+                    lines.append("相關係數 0.3 以上（中等以上）的項目：" + "、".join(strong) + "。")
+                lines.append("讀法：第 1 節看「冠軍做得好的是哪一項」，這一節看「哪一項真的會讓防守變好」；"
+                             "兩邊都排在最上面的那一項，才是冠軍防守的關鍵。相關係數 0.1 弱、0.3 中、0.5 以上強。")
+            insight(lines, where=slot2)
+
+            # ===== 3. 每一位冠軍 =====
+            st.divider()
+            slot3 = section("3　每一位冠軍的防守：排名一覽",
+                            "一列一位冠軍、一欄一項防守，格子是聯盟排名；顏色越深排名越前面（1＝最好）")
+            labels = [f"{s_} {team_label(a_)}" for s_, a_ in zip(DCH["season"], DCH["abbreviation"])]
+            names = list(DEF_ITEMS)
+            zr = [[DCH.loc[idx, f"rk_{DEF_ITEMS[n][0]}"] for n in names] for idx in DCH.index]
+            fig = go.Figure(go.Heatmap(
+                z=zr, x=names, y=labels, zmin=1, zmax=30,
+                colorscale=[[i / (len(PURPLE_RAMP) - 1), c] for i, c in enumerate(PURPLE_RAMP[::-1])],
+                xgap=3, ygap=3, showscale=False,
+                hovertemplate="%{y}<br>%{x}：聯盟第 %{z:.0f} 名<extra></extra>"))
+            for i, lab in enumerate(labels):
+                for j, n in enumerate(names):
+                    v = zr[i][j]
+                    if pd.isna(v):
+                        continue
+                    fig.add_annotation(x=n, y=lab, showarrow=False, text=f"{int(v)}",
+                                       font=dict(size=11, color="#ffffff" if v <= 8 else INK))
+            fig.update_yaxes(type="category", autorange="reversed", showgrid=False)
+            fig.update_xaxes(type="category", showgrid=False, side="top", tickangle=0)
+            st.plotly_chart(style(fig, 110 + 30 * len(labels)), width="stretch", config={"displayModeBar": False})
+            zdf = pd.DataFrame(zr, columns=names, index=labels)
+            n_top10_eff = int((zdf["防守效率"] <= 10).sum())
+            weak = zdf[zdf["防守效率"] > 10]
+            lines = [f"{len(zdf)} 位冠軍裡有 <b>{n_top10_eff}</b> 位的防守效率排進聯盟前 10。"]
+            if len(weak):
+                lines.append("防守效率沒進前 10 的冠軍：" + "、".join(f"{l}（第 {int(v)}）" for l, v in weak["防守效率"].items())
+                             + "——這幾隊多半是靠進攻奪冠，可以到「冠軍密碼」Q1 對照進攻效率。")
+            insight(lines, where=slot3)
+
+            # ===== 4. 延伸：對手三分，少讓投還是投不進？ =====
+            st.divider()
+            slot4 = section("4　延伸：對手三分，是「少讓投」還是「投不進」？",
+                            "每個點是一隊一季：橫軸＝對手三分出手比例比同季平均少多少、縱軸＝對手三分命中率比同季平均低多少（都是百分點，"
+                            "正數＝防守比較好）；★ 是冠軍。右上＝少讓投又投不進，左上＝讓對手投、但對手投不進")
+            fig = go.Figure()
+            oth = DF[~DF["champion"]].dropna(subset=["g_opp_3par", "g_opp_3p"])
+            fig.add_trace(go.Scatter(
+                x=oth["g_opp_3par"] * 100, y=oth["g_opp_3p"] * 100, mode="markers", name="其他隊季",
+                marker=dict(size=6, color="#d9d3e6"),
+                customdata=oth[["season", "abbreviation"]].values,
+                hovertemplate="%{customdata[0]} %{customdata[1]}<br>少讓投 %{x:+.1f}、投不進 %{y:+.1f} 百分點<extra></extra>"))
+            ch4 = DCH.dropna(subset=["g_opp_3par", "g_opp_3p"])
+            fig.add_trace(go.Scatter(
+                x=ch4["g_opp_3par"] * 100, y=ch4["g_opp_3p"] * 100, mode="markers", name="冠軍",
+                marker=dict(size=15, symbol="star", color=[TEAM_COLORS.get(a, ACCENT) for a in ch4["abbreviation"]],
+                            line=dict(width=1, color=SURFACE)),
+                customdata=[[s_, ALL_ZH.get(a_, a_)] for s_, a_ in zip(ch4["season"], ch4["abbreviation"])],
+                hovertemplate="★ %{customdata[0]} %{customdata[1]}<br>少讓投 %{x:+.1f}、投不進 %{y:+.1f} 百分點<extra></extra>"))
+            fig.add_hline(y=0, line=dict(color=MUTED, width=1, dash="dot"))
+            fig.add_vline(x=0, line=dict(color=MUTED, width=1, dash="dot"))
+            fig.update_xaxes(title="對手三分出手比例：比同季平均少幾個百分點（→ 越不讓投）", zeroline=False)
+            fig.update_yaxes(title="對手三分命中率：比同季平均低幾個百分點（↑ 越投不進）", zeroline=False)
+            fig.update_layout(legend=dict(orientation="h", y=1.06, x=0))
+            st.plotly_chart(style(fig, 460), width="stretch", config={"displayModeBar": False})
+            n4 = len(ch4)
+            if n4:
+                less = int((ch4["g_opp_3par"] > 0).sum())
+                miss = int((ch4["g_opp_3p"] > 0).sum())
+                both = int(((ch4["g_opp_3par"] > 0) & (ch4["g_opp_3p"] > 0)).sum())
+                lines = [f"{n4} 位冠軍裡，<b>{miss}</b> 位讓對手三分投得比同季平均差，"
+                         f"<b>{less}</b> 位讓對手少投三分（兩者都有：{both} 位）。"]
+                r3 = DF[["g_opp_3p", "g_opp_3par", "g_def_rating"]].dropna()
+                if len(r3) > 10:
+                    lines.append(f"全聯盟來看，對手三分命中率和防守效率的相關 r = {r3['g_opp_3p'].corr(r3['g_def_rating']):+.2f}，"
+                                 f"對手三分出手比例 r = {r3['g_opp_3par'].corr(r3['g_def_rating']):+.2f}。")
+                lines.append("注意：對手三分命中率有很大一部分是運氣（對手空檔投不進也算），"
+                             "要知道是不是防守逼出來的，需要「防守者距離」資料（目前沒有）。")
+                check = (("後半句成立" if miss > less else "後半句不成立")
+                         + f"：讓對手投不進的冠軍（{miss} 位）{'比' if miss > less else '沒有比'}讓對手少投的（{less} 位）多。")
+                insight(lines, where=slot4, check=check)
+
+            with st.expander("看每一位冠軍的實際數字"):
+                nice_table(pd.DataFrame({
+                    "球季": DCH["season"], "冠軍": [ALL_ZH.get(a, a) for a in DCH["abbreviation"]], "_key": DCH["abbreviation"],
+                    "防守效率": [def_show(v, "num1") for v in DCH["def_rating"]],
+                    "對手有效命中率": [def_show(v, "pct") for v in DCH["opp_efg"]],
+                    "對手三分出手比例": [def_show(v, "pct") for v in DCH["opp_3par"]],
+                    "對手三分命中率": [def_show(v, "pct") for v in DCH["opp_3p"]],
+                    "逼對手失誤率": [def_show(v, "pct") for v in DCH["forced_tov"]],
+                    "防守籃板率": [def_show(v, "pct") for v in DCH["dreb_pct"]],
+                }), num_cols=("防守效率", "對手有效命中率", "對手三分出手比例", "對手三分命中率", "逼對手失誤率", "防守籃板率"),
+                    dot_col="冠軍", colors=TEAM_COLORS)
+
+
 if PAGE == "球季趨勢":
     tr_slot = section(f"{metric_name}：各隊逐季變化", "★ 是該隊奪冠的球季；選擇聚焦球隊，其他球隊會變成灰色背景，線條就不會互相干擾")
     insight(trend_findings(team_season, metric, mfmt, metric_name), where=tr_slot)
@@ -5472,6 +5730,163 @@ if PAGE == "數據表":
 # 每頁共用的結尾：頁首摘要、資料來源與方法、相關頁面、上一頁／下一頁（1030-1、1030-2、1030-4）
 # =====================================================================
 # 相關頁面：（頁面, 為什麼要接著看）
+# ---------- 贏球與輸球：冠軍輸球那幾場，是哪一項數據掉最多？（2026-11-06）----------
+WL_METRICS = {   # 顯示名稱 → (欄位, 格式, 越高越好?)
+    "真實命中率": ("ts", ".1%", True),
+    "三分命中率": ("fg3_pct", ".1%", True),
+    "兩分命中率": ("fg2_pct", ".1%", True),
+    "罰球出手率": ("fta_rate", ".2f", True),
+    "失誤": ("tov", ".1f", False),
+    "進攻籃板": ("oreb", ".1f", True),
+    "防守籃板": ("dreb", ".1f", True),
+    "助攻": ("ast", ".1f", True),
+    "抄截": ("stl", ".1f", True),
+    "阻攻": ("blk", ".1f", True),
+    "犯規": ("pf", ".1f", False),
+}
+TERMS.update({
+    "贏球場 − 輸球場": ("同一隊、同一季，贏球那幾場的平均減掉輸球那幾場的平均", "失誤、犯規越少越好，所以反過來減，正數一樣代表「贏球時比較好」"),
+    "標準差（本頁）": ("這隊這一季每場數字「平常會上下跳多少」；差 1 個標準差＝差了一場正常的起伏那麼多", "把不同單位（%、次數）換成同一把尺，才能比哪一項掉最多"),
+    "真實命中率": ("把兩分、三分、罰球都算進去的命中率", "得分 ÷［2 ×（投籃出手 ＋ 0.44 × 罰球出手）］"),
+    "罰球出手率": ("每投 1 次籃，換到幾次罰球；越高代表越常切入、造犯規", "罰球出手 ÷ 投籃出手"),
+    "其他強隊": ("整季勝率六成以上、但那一季沒有奪冠的球隊", "和月份趨勢頁同一個定義"),
+})
+WL_SHOOT = {"真實命中率", "三分命中率", "兩分命中率"}
+
+
+@st.cache_data(ttl=900, show_spinner="讀取贏球場／輸球場的平均數據中…")
+def load_wl_splits():
+    """team_wl_splits_mv（docs/sql/2026-11-06_贏球與輸球.sql 建立）；還沒建立就回傳 None"""
+    try:
+        return fetch_all("team_wl_splits_mv", ["team_id", "season", "season_type", "wl"])
+    except Exception:
+        return None
+
+
+def prep_wl(df, season_type, strong=0.6):
+    """一隊一季一列：每項指標「贏球場平均 − 輸球場平均」換成幾個標準差（正數＝贏球時比較好）"""
+    d = df[df["season_type"] == season_type].copy()
+    num = ["games"] + [c for c, _, _ in WL_METRICS.values()] + [f"sd_{c}" for c, _, _ in WL_METRICS.values()]
+    for c in num:
+        d[c] = pd.to_numeric(d[c], errors="coerce")
+    keys = ["team_id", "abbreviation", "season"]
+    w = d[d["wl"] == "W"].set_index(keys)
+    l_ = d[d["wl"] == "L"].set_index(keys)
+    out = w[["games"]].rename(columns={"games": "n_w"}).join(l_[["games"]].rename(columns={"games": "n_l"}), how="inner")
+    for name, (c, _, up) in WL_METRICS.items():
+        out[f"w_{c}"], out[f"l_{c}"] = w[c], l_[c]
+        sd = w[f"sd_{c}"].where(w[f"sd_{c}"] > 0)
+        out[f"z_{c}"] = (w[c] - l_[c]) / sd * (1 if up else -1)
+    out = out.reset_index()
+    out = out[(out["n_w"] >= 5) & (out["n_l"] >= 5)]          # 贏或輸不到 5 場的球季，平均不可靠
+    out["win_pct"] = out["n_w"] / (out["n_w"] + out["n_l"])
+    out["champion"] = [(s_, a_) in CHAMP_SET for s_, a_ in zip(out["season"], out["abbreviation"])]
+    out["grp"] = "其他球隊"
+    out.loc[(~out["champion"]) & (out["win_pct"] >= strong), "grp"] = "其他強隊"
+    out.loc[out["champion"], "grp"] = "冠軍"
+    return out[out["season"] != ALL_SEASONS[-1]]                # 本季還沒打完
+
+
+if PAGE == "贏球與輸球":
+    hypothesis("冠軍輸球的那幾場，是哪一項數據掉最多？是投不進，還是失誤、籃板這類「打法亂掉」？",
+               "冠軍輸球時掉最多的是投籃命中（真實命中率、三分命中率），不是失誤或籃板；而且其他強隊也是一樣——輸球主要是手感，不是努力不夠。")
+    WL_RAW = load_wl_splits()
+    if WL_RAW is None or WL_RAW.empty:
+        st.info("尚未載入資料，請先到 Supabase → SQL Editor 執行 docs/sql/2026-11-06_贏球與輸球.sql"
+                "（建立 team_wl_splits_mv），再按左側「重新讀取最新資料」。")
+    else:
+        wl_type = seg("比賽類型", ["例行賽", "季後賽"], key="wl_type")
+        WL = prep_wl(WL_RAW, "Regular Season" if wl_type == "例行賽" else "Playoffs")
+        st.caption(f"目前用資料庫已載入球員逐場數據的 {WL['abbreviation'].nunique()} 隊、{WL['season'].nunique()} 季計算"
+                   "（每天自動增加 2 隊）；贏或輸不到 5 場的球季不列入。")
+        names = list(WL_METRICS)
+        if WL.empty or not WL["champion"].any():
+            st.info("這個條件下還沒有足夠的冠軍球季（季後賽冠軍輸球的場數常常不到 5 場，可以先看例行賽）。")
+        else:
+            # ===== 1. 哪一項掉最多 =====
+            slot1 = section("1　冠軍輸球時，哪一項掉最多？",
+                            "長條＝贏球場平均 − 輸球場平均，換成「幾個標準差」，不同單位的數據才能放在一起比；越長代表輸球時掉越多。"
+                            "失誤、犯規是越少越好，已經反過來算（輸球時失誤變多，長條一樣往右）")
+            G = WL.groupby("grp")[[f"z_{WL_METRICS[n][0]}" for n in names]].mean()
+            G.columns = names
+            order = G.loc["冠軍"].sort_values().index.tolist()
+            fig = go.Figure()
+            for grp_, color in [("其他球隊", "#d9d4e3"), ("其他強隊", "#a59db5"), ("冠軍", ACCENT)]:
+                if grp_ in G.index:
+                    n_ = int((WL["grp"] == grp_).sum())
+                    fig.add_trace(go.Bar(y=order, x=G.loc[grp_, order], orientation="h", name=f"{grp_}（{n_} 季）",
+                                         marker_color=color,
+                                         hovertemplate="%{y}：贏球比輸球好 %{x:.2f} 個標準差<extra>" + grp_ + "</extra>"))
+            fig.add_vline(x=0, line=dict(color=INK_2, width=1))
+            fig.update_layout(barmode="group", bargap=0.25, legend=dict(traceorder="reversed"))
+            fig.update_xaxes(title="贏球場 − 輸球場（標準差；越大＝輸球時掉越多）")
+            rounded(fig)
+            st.plotly_chart(style(fig, 520), width="stretch")
+            ch = G.loc["冠軍"].sort_values(ascending=False)
+            top, second = ch.index[0], ch.index[1]
+            effort = [n for n in ["失誤", "進攻籃板"] if n in ch.index]
+            lines = [f"冠軍輸球時掉最多的是{top}（平均 {ch.iloc[0]:.2f} 個標準差），其次是{second}（{ch.iloc[1]:.2f}）。",
+                     "「努力型」數據掉得少：" + "、".join(f"{n} {ch[n]:.2f}" for n in effort) + "。" if effort else "",
+                     ("其他強隊掉最多的也是" + G.loc["其他強隊"].idxmax() + "。") if "其他強隊" in G.index else "",
+                     "讀法：防守籃板常常是「結果」不是原因——對手投不進，我們才搶得到防守籃板，所以它也會在贏球時比較多。"]
+            shoot_top = top in WL_SHOOT
+            same = "其他強隊" in G.index and G.loc["其他強隊"].idxmax() in WL_SHOOT
+            insight(lines, where=slot1, label="發現",
+                    check=("成立：冠軍輸球主要是投不進，其他強隊也一樣。" if shoot_top and same else
+                           "部分成立：冠軍輸球主要是投不進，但其他強隊掉最多的是別的項目。" if shoot_top else
+                           f"不成立：冠軍輸球時掉最多的是{top}，不是投籃命中。"))
+            with st.expander("名詞小辭典"):
+                term_table(["贏球場 − 輸球場", "標準差（本頁）", "真實命中率", "罰球出手率", "其他強隊"],
+                           first_note="只看自己隊的數據，不知道對手那一場打得多好；輸球可能是對手手感太好，不一定是自己變差。")
+
+            # ===== 2. 每一位冠軍都一樣嗎 =====
+            st.divider()
+            slot2 = section("2　每一位冠軍都是這樣輸球的嗎？",
+                            "一列一位冠軍、一欄一項數據，顏色越深＝那一項輸球時掉越多；每一列框起來的是這位冠軍掉最多的那一項")
+            C = WL[WL["champion"]].sort_values("season")
+            zc = [f"z_{WL_METRICS[n][0]}" for n in order[::-1]]
+            Z = C[zc].to_numpy()
+            ylab = [f"{s_} {team_label(a_)}" for s_, a_ in zip(C["season"], C["abbreviation"])]
+            xlab = order[::-1]
+            fig = go.Figure(go.Heatmap(
+                z=Z, x=xlab, y=ylab, zmin=0, zmax=max(1.0, float(pd.Series(Z.ravel()).quantile(0.95))),
+                colorscale=[[i / (len(PURPLE_RAMP) - 1), c_] for i, c_ in enumerate(PURPLE_RAMP)], xgap=3, ygap=3,
+                text=[[f"{v:.1f}" if pd.notna(v) else "" for v in row] for row in Z], texttemplate="%{text}",
+                hovertemplate="%{y}<br>%{x}：贏球比輸球好 %{z:.2f} 個標準差<extra></extra>",
+                colorbar=dict(title="標準差", thickness=10)))
+            best = C[zc].idxmax(axis=1).map(lambda c_: xlab[zc.index(c_)])
+            for i, b in enumerate(best):
+                j = xlab.index(b)
+                fig.add_shape(type="rect", x0=j - 0.5, x1=j + 0.5, y0=i - 0.5, y1=i + 0.5,
+                              line=dict(color=INK, width=2))
+            fig.update_yaxes(autorange="reversed", type="category")
+            fig.update_xaxes(side="top", type="category")
+            st.plotly_chart(style(fig, 120 + 30 * len(C)), width="stretch")
+            cnt = best.value_counts()
+            n_shoot = int(best.isin(WL_SHOOT).sum())
+            insight(where=slot2, label="發現", lines=[
+                f"{len(C)} 位冠軍裡，有 {n_shoot} 位輸球時掉最多的是投籃命中（真實／三分／兩分命中率）。",
+                "掉最多的項目：" + "、".join(f"{k} {v} 位" for k, v in cnt.items()) + "。",
+                ("例外：" + "、".join([f"{ylab[i]}（{b}）" for i, b in enumerate(best) if b not in WL_SHOOT][:6])
+                 + ("…" if len(C) - n_shoot > 6 else "") + "。")
+                if n_shoot < len(C) else "",
+            ], check=("成立：大多數冠軍都是「投不進就輸」。" if n_shoot >= len(C) * 0.6 else
+                      "不成立：超過四成的冠軍，輸球時掉最多的不是投籃命中。"))
+
+            # ===== 3. 單一冠軍的實際數字 =====
+            st.divider()
+            section("3　單一冠軍：贏球場 vs 輸球場的實際數字", "選一位冠軍，看每一項數據贏球時、輸球時各是多少")
+            pick = st.selectbox("冠軍球季", ylab[::-1], key="wl_pick")
+            r = C.iloc[ylab.index(pick)]
+            rows = []
+            for n in order[::-1]:
+                c_, f_, up = WL_METRICS[n]
+                rows.append({"數據": n, "贏球場": fmt(r[f"w_{c_}"], f_), "輸球場": fmt(r[f"l_{c_}"], f_),
+                             "差（標準差）": fmt(r[f"z_{c_}"], "+.2f"), "_z": min(max(r[f"z_{c_}"], 0) / 1.5, 1)})
+            st.caption(f"{pick}：贏 {int(r['n_w'])} 場、輸 {int(r['n_l'])} 場（{wl_type}）")
+            nice_table(pd.DataFrame(rows), num_cols=("贏球場", "輸球場", "差（標準差）"), bars={"差（標準差）": "_z"})
+
+
 RELATED = {
     "每日戰報": [("球季趨勢", "把今天的表現放回 20 季的長期走勢裡看"), ("冠軍密碼", "強隊和冠軍差在哪裡")],
     "冠軍密碼": [("投籃分布", "Q2 的三分趨勢，換成球場上的出手位置來看"), ("戰術使用", "淨效率高，是靠哪些戰術打出來的"),
@@ -5533,6 +5948,20 @@ SOURCES = {
     "球員": ("player_season_stats、player_game_stats", "上方選的球隊、球季、比賽類型", "場均＝整季加總 ÷ 出賽場數；真實命中率＝得分 ÷［2 ×（出手 ＋ 0.44 × 罰球出手）］。"),
     "數據表": ("team_season_stats", "上方選的球隊、球季、比賽類型", "可排序、下載 Excel；指標算法見表格下方「指標說明」。"),
 }
+RELATED["贏球與輸球"] = [("冠軍密碼", "冠軍整季強在哪幾項（Q1 的 10 項指標）"),
+                    ("投籃分布", "輸球常常是投不進，那冠軍平常從哪裡出手"),
+                    ("例行賽與季後賽", "季後賽對手更強，球星的命中率會不會掉")]
+SOURCES["贏球與輸球"] = ("team_wl_splits_mv（由 player_game_stats 加總成全隊每場，再分贏球場／輸球場平均；"
+                     "docs/sql/2026-11-06_贏球與輸球.sql 建立）、champions",
+                     "2006-07 起；只限資料庫已載入球員逐場數據的球隊（每天增加 2 隊）；贏或輸不到 5 場的球季不列入；本季不列入",
+                     "差＝（贏球場平均 − 輸球場平均）÷ 這隊這季每場的標準差，失誤、犯規反過來算；"
+                     "其他強隊＝整季勝率六成以上、沒奪冠；只有自己隊的數據，不知道對手那一場的表現。")
+RELATED["防守端"] = [("冠軍密碼", "防守效率在 10 項指標裡排第幾（Q1）"), ("投籃分布", "換成進攻端：冠軍自己從哪裡出手"),
+                    ("贏球與輸球", "輸球時是不是自己投不準")]
+SOURCES["防守端"] = ("league_team_seasons（全聯盟 30 隊每季，含對手數據）、champions", "例行賽；所有已載入的球季",
+                    "對手有效命中率＝（對手命中 ＋ 0.5 × 對手三分命中）÷ 對手出手；防守回合＝對手得分 ÷ 防守效率 × 100；"
+                    "逼對手失誤率＝對手失誤 ÷ 防守回合；排名是同一季 30 隊裡排第幾（1＝最好）；"
+                    "相關係數用「和同季平均的差」算，排除年代差異；沒有對手罰球數據，所以沒有「讓對手少罰球」這一項。")
 OWN_SOURCES = {"每日戰報", "上場陣容", "籤運與傷兵"}   # 這幾頁本來就有自己的「資料來源與方法」
 
 
