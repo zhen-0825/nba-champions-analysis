@@ -16,6 +16,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+import season_stats as ss   # 本季數據的計算（奪冠列車、焦點人物、首頁本季故事）
+
 # =====================================================================
 # 設定區
 # =====================================================================
@@ -814,8 +816,12 @@ LOGO_B64 = "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MCIg
 
 # （群組, 頁面名稱, 這頁回答的問題, 卡片說明, 這頁要用到哪些篩選）
 PAGES = [
-    ("今日", "每日戰報", "昨晚發生什麼事？",
+    ("每日戰報", "每日戰報", "昨晚發生什麼事？",
      "下一場勝率與球員預估、全聯盟比分卡、值得關注的球員、球隊隱憂與東西區戰績榜，每天自動更新。", set()),
+    ("奪冠列車", "奪冠列車", "今年誰最像冠軍？",
+     "用歷屆冠軍的六項標準（進攻、防守、三分、籃板、助攻、失誤）衡量本季 30 隊：冠軍指數、雷達圖、最像哪一位冠軍。", set()),
+    ("焦點人物", "焦點人物", "本季誰最值得看？",
+     "爆發中、不可或缺、關鍵先生：用數據挑出本季的人物；每位球員有雷達圖，點開看完整的傳統與進階數據。", set()),
     ("冠軍故事", "冠軍密碼", "奪冠最需要什麼？",
      "冠軍在攻守效率、三分、籃板等 10 項指標排聯盟第幾；三分時代與冠軍輪替。", {"season"}),
     ("冠軍故事", "投籃分布", "冠軍從哪裡出手？",
@@ -872,19 +878,41 @@ PAGES = [
      "季後賽各輪有主場優勢一方的晉級比例、搶七；每位冠軍哪幾輪有主場優勢；同樣兩隊在主場和客場的單場勝率差。", set()),
     ("冠軍故事", "季末輪休", "季末最後 10 場，主力真的在休息嗎？",
      "最後 10 場的前 3 號主力缺陣比例、上場分鐘、上場人數、勝率；冠軍和其他強隊比；只看主力全員上場時，季末下滑還在嗎。", set()),
-    ("自由探索", "球季趨勢", "各隊一路怎麼變化？",
+    ("資料與探索", "球季趨勢", "各隊一路怎麼變化？",
      "選一個指標，看各隊 20 季的折線；可聚焦幾支球隊，其他變灰。", {"team", "season", "type", "metric"}),
-    ("自由探索", "球隊 × 球季", "哪隊在哪季特別突出？",
+    ("資料與探索", "球隊 × 球季", "哪隊在哪季特別突出？",
      "熱力圖一次看完所有球隊、所有球季，顏色越深越高，★ 是奪冠季。", {"team", "season", "type", "metric"}),
-    ("自由探索", "冠軍球季比較", "奪冠那季比平常強多少？",
+    ("資料與探索", "冠軍球季比較", "奪冠那季比平常強多少？",
      "每支冠軍隊的奪冠球季，和它其他球季的平均差多少。", {"team", "season", "type", "metric"}),
-    ("資料", "球員", "誰是冠軍的關鍵球員？",
+    ("資料與探索", "球員", "誰是冠軍的關鍵球員？",
      "球員在隊上的逐季變化、出手量 vs 效率、單季逐場數據。", {"team", "season", "type"}),
-    ("資料", "數據表", "原始數字與下載",
+    ("資料與探索", "數據表", "原始數字與下載",
      "球隊 × 球季的完整數字，可以排序、下載 Excel。", {"team", "season", "type"}),
 ]
+# 冠軍故事的 28 頁分成 5 章（2026-11-23 改版：左側 35 個按鈕合併成 6 個入口）
+CHAPTERS = {
+    "奪冠關鍵": ["冠軍密碼", "防守端", "贏球與輸球"],
+    "進攻與投籃": ["投籃分布", "戰術使用", "節奏與勝率"],
+    "球星與陣容": ["上場陣容", "陣容深度", "頭號得分手缺陣", "缺陣場的對手", "誰補上得分", "輸球時的球星",
+               "二號與三號得分手", "得分穩定度", "例行賽與季後賽", "每一輪的球星", "對手防守與球星"],
+    "賽程與狀態": ["賽程與休息", "主場與客場", "月份趨勢", "輸球之後", "季末輪休", "跑動距離"],
+    "季後賽之路": ["季後賽輪次", "系列賽主場優勢", "籤運與傷兵", "奪冠前一季", "奪冠隔年"],
+}
+CHAPTER_OF = {pg: ch for ch, pgs in CHAPTERS.items() for pg in pgs}
+# 依章節重新排序（上一頁／下一頁也照這個順序走）；章節裡沒列到的頁放在冠軍故事最後
+_story = [p for p in PAGES if p[0] == "冠軍故事"]
+_story.sort(key=lambda p: [pg for pgs in CHAPTERS.values() for pg in pgs].index(p[1]) if p[1] in CHAPTER_OF else 999)
+PAGES = [p for p in PAGES if p[0] != "冠軍故事" and p[0] != "資料與探索"] + _story + [p for p in PAGES if p[0] == "資料與探索"]
 PAGE_INFO = {p[1]: p for p in PAGES}
 HOME = "首頁"
+# 左側的 6 個入口：（顯示名稱, 點了去哪一頁）
+NAV = [("首頁", HOME), ("每日戰報", "每日戰報"), ("奪冠列車", "奪冠列車"), ("焦點人物", "焦點人物"),
+       ("冠軍故事", "冠軍密碼"), ("資料與探索", "球季趨勢")]
+
+
+def nav_of(page):
+    """這一頁屬於左側哪一個入口"""
+    return "首頁" if page == HOME else PAGE_INFO[page][0]
 
 
 def goto(page):
@@ -911,12 +939,9 @@ with st.sidebar:
                 '<div><div class="logo-name"><span class="z">Z</span><span class="h">he</span>'
                 '<span class="z">N</span></div><div class="logo-tag">NBA 冠軍數據分析</div></div></div>',
                 unsafe_allow_html=True)
-    st.button("回到首頁", key="nav_home", width="stretch", on_click=goto, args=(HOME,), help="回到首頁")
-    for grp in dict.fromkeys(p[0] for p in PAGES):     # 依序列出三個群組
-        st.markdown(f'<div class="nav-group">{grp}</div>', unsafe_allow_html=True)
-        for _, name, *_ in [p for p in PAGES if p[0] == grp]:
-            st.button(name, key=f"nav_{name}", width="stretch", on_click=goto, args=(name,),
-                      type="primary" if PAGE == name else "secondary")
+    for label, target in NAV:     # 6 個入口；目前所在的入口亮紫色
+        st.button(label, key=f"nav_{label}", width="stretch", on_click=goto, args=(target,),
+                  type="primary" if nav_of(PAGE) == label else "secondary")
     st.divider()
     if st.button("重新讀取最新資料", width="stretch",
                  help="網站每 15 分鐘會自動重讀資料庫；剛更新完資料想馬上看到，就按這裡"):
@@ -932,8 +957,8 @@ with st.sidebar:
 if PAGE == HOME:
     st.markdown(f"""
 <div class="hero">
-  <h1>NBA 冠軍球隊數據分析</h1>
-  <div class="hero-sub">2019–2026 八屆冠軍，近二十年的數據軌跡：冠軍的關鍵是什麼？</div>
+  <h1>ZheN NBA 數據分析</h1>
+  <div class="hero-sub">本季誰會奪冠？用歷屆冠軍留下的數據標準，每天說本季的故事。</div>
   <span class="chip">{ALL_SEASONS[0]} – {ALL_SEASONS[-1]}</span>
   <span class="chip">資料更新至 {latest_game_date() or '未知'}</span>
   <span class="chip">資料庫已有 {len(ALL_TEAMS) + len(EXTRA_TEAMS)} / 30 隊</span>
@@ -941,8 +966,33 @@ if PAGE == HOME:
 """, unsafe_allow_html=True)
 else:
     grp, name, question, *_ = PAGE_INFO[PAGE]
-    st.markdown(f'<div class="pagehead"><div class="crumb">{grp}　／　{name}</div>'
+    crumb = f"{grp}　／　{CHAPTER_OF[name]}　／　{name}" if name in CHAPTER_OF else (
+        f"{grp}　／　{name}" if grp != name else grp)
+    st.markdown(f'<div class="pagehead"><div class="crumb">{crumb}</div>'
                 f'<h2>{name}</h2><div class="pq">{question}</div></div>', unsafe_allow_html=True)
+
+    def _pick(key):
+        """章節或頁面按鈕被點了：切到那一頁"""
+        v = st.session_state.get(key)
+        if v:
+            goto(CHAPTERS[v][0] if v in CHAPTERS else v)
+
+    if grp == "冠軍故事":
+        ch_now = CHAPTER_OF.get(name, list(CHAPTERS)[0])
+        try:
+            st.pills("章節", list(CHAPTERS), selection_mode="single", default=ch_now,
+                     key=f"chap_{name}", on_change=_pick, args=(f"chap_{name}",))
+            st.pills(f"「{ch_now}」的 {len(CHAPTERS[ch_now])} 頁", CHAPTERS[ch_now], selection_mode="single",
+                     default=name, key=f"chpg_{name}", on_change=_pick, args=(f"chpg_{name}",))
+        except AttributeError:   # 舊版 Streamlit 沒有 pills
+            pass
+    elif grp == "資料與探索":
+        opts = [p[1] for p in PAGES if p[0] == "資料與探索"]
+        try:
+            st.pills("頁面", opts, selection_mode="single", default=name, key=f"expg_{name}",
+                     on_change=_pick, args=(f"expg_{name}",))
+        except AttributeError:
+            pass
 SUMMARY_SLOT = st.container() if PAGE != HOME else None   # 頁首摘要的空位（1030-1），整頁畫完才填
 
 
@@ -1057,6 +1107,189 @@ if team_season.empty:
 
 
 # =====================================================================
+# 本季模組（2026-11-23 改版）：首頁本季故事、奪冠列車、焦點人物共用
+# 讀資料庫 → 交給 season_stats.py 算 → 這裡只負責畫圖和排版
+# =====================================================================
+SEASON_GREY = "#d9d4e3"     # 本季圖表裡「其他」的顏色：淡灰，讓主角的紫色跳出來
+CHAMP_LINE = "#8f889f"      # 歷屆冠軍平均：灰色虛線
+
+
+def _rf(table, filters, order, page=1000):
+    """分頁讀取＋篩選（本季模組用）；資料表不存在或連線出錯時回傳空表格"""
+    rows, start = [], 0
+    try:
+        while True:
+            q = get_client().table(table).select("*")
+            for op, col, val in filters:
+                q = getattr(q, op)(col, val)
+            for c in order:
+                q = q.order(c)
+            part = q.range(start, start + page - 1).execute().data
+            rows += part
+            if len(part) < page:
+                break
+            start += page
+    except Exception:
+        return pd.DataFrame()
+    return pd.DataFrame(rows)
+
+
+@st.cache_data(ttl=900)
+def cur_season():
+    """資料庫裡最新的球季，例如 2025-26"""
+    try:
+        r = get_client().table("recap_team_games").select("season").order("season", desc=True).limit(1).execute().data
+        return r[0]["season"] if r else None
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=900, show_spinner="讀取本季比賽中…")
+def cur_team_games(season):
+    df = _rf("recap_team_games", [("eq", "season", season)], ["game_date", "game_id", "team_id"])
+    if not df.empty:
+        df["game_date"] = pd.to_datetime(df["game_date"])
+    return df
+
+
+@st.cache_data(ttl=900, show_spinner="讀取本季球員數據中…（一季約幾千筆）")
+def cur_player_games(season):
+    df = _rf("recap_player_games", [("eq", "season", season)], ["game_date", "game_id", "player_id"])
+    if not df.empty:
+        df["game_date"] = pd.to_datetime(df["game_date"])
+    return df
+
+
+@st.cache_data(ttl=900, show_spinner="讀取關鍵時刻得分中…")
+def cur_clutch(season):
+    return _rf("pbp_events", [("eq", "season", season), ("eq", "is_clutch", True)], ["game_id", "action_number"])
+
+
+def season_data():
+    """本季的所有表格，一次準備好；資料庫還沒有本季資料、或計算出錯時回傳 None（頁面改顯示提示，不會整頁壞掉）"""
+    try:
+        return _season_data()
+    except Exception as e:   # 不讓本季模組的錯誤拖垮整個網站
+        st.caption(f"本季數據暫時算不出來：{type(e).__name__}")
+        return None
+
+
+def _season_data():
+    season = cur_season()
+    if not season:
+        return None
+    tg = cur_team_games(season)
+    if tg.empty:
+        return None
+    teams_ = ss.team_table(tg)
+    champs_p, champ_avg = ss.champion_profiles(league, champs)
+    teams_["champ_idx"] = ss.champion_index(teams_, champ_avg)
+    pg = cur_player_games(season)
+    players_ = ss.player_table(pg, tg) if not pg.empty else pd.DataFrame()
+    n_games = tg["game_id"].nunique()
+    return {"season": season, "tg": tg, "pg": pg, "teams": teams_, "champs_p": champs_p, "champ_avg": champ_avg,
+            "players": players_, "n_games": n_games, "last_day": tg["game_date"].max()}
+
+
+def zh(abbr):
+    return ALL_ZH.get(abbr, abbr)
+
+
+def radar(traces, height=400):
+    """六角雷達圖：traces＝[(名稱, 六個 0～100 的值, 顏色, 線型, 要不要填色)]；外圈＝聯盟最好"""
+    fig = go.Figure()
+    for name, vals, color, dash, fill in traces:
+        labels = [a[0] for a in ss.TEAM_AXES]
+        v = [float(x) if pd.notna(x) else 0 for x in vals]
+        fig.add_trace(go.Scatterpolar(
+            r=v + v[:1], theta=labels + labels[:1], name=name, mode="lines+markers",
+            line=dict(color=color, width=3 if fill else 2, dash=dash),
+            marker=dict(size=6 if fill else 4, color=color),
+            fill="toself" if fill else None, fillcolor="rgba(124,58,237,0.16)" if fill else None,
+            hovertemplate=name + "<br>%{theta}：贏過聯盟 %{r:.0f}%<extra></extra>"))
+    fig.update_layout(polar=dict(
+        bgcolor="rgba(0,0,0,0)",
+        radialaxis=dict(range=[0, 100], tickvals=[25, 50, 75, 100], ticktext=["", "中間", "", "最好"],
+                        tickfont=dict(size=10, color=MUTED), gridcolor=GRID, linecolor=GRID, angle=90),
+        angularaxis=dict(tickfont=dict(size=15, color=INK), gridcolor=GRID, linecolor=GRID, direction="clockwise")))
+    fig = style(fig, height)
+    fig.update_layout(legend=dict(orientation="h", y=-0.08, x=0.5, xanchor="center"), margin=dict(l=40, r=40, t=24, b=24))
+    return fig
+
+
+def hbar(labels, values, colors, texts, height, xtitle="", xfmt=None, zero=False):
+    """橫向長條圖：主角紫色、其他灰色，數字直接寫在長條旁邊（不用看座標軸）"""
+    fig = go.Figure(go.Bar(y=labels, x=values, orientation="h", marker_color=colors, text=texts,
+                           textposition="outside", cliponaxis=False, hoverinfo="skip"))
+    fig.update_yaxes(autorange="reversed", tickfont=dict(size=13, color=INK))
+    fig.update_xaxes(title=xtitle, showticklabels=False)
+    if zero:
+        fig.add_vline(x=0, line=dict(color=MUTED, width=1))
+    fig = style(fig, height)
+    fig.update_layout(margin=dict(l=8, r=60, t=8, b=8), showlegend=False)
+    return fig
+
+
+def dumbbell(labels, a, b, a_name, b_name, height, unit=""):
+    """啞鈴圖：灰點＝平常（a）、紫點＝現在（b），中間連一條線；一眼看出變多少"""
+    fig = go.Figure()
+    for i, (lb, x0, x1) in enumerate(zip(labels, a, b)):
+        fig.add_trace(go.Scatter(x=[x0, x1], y=[lb, lb], mode="lines", line=dict(color=SEASON_GREY, width=6),
+                                 showlegend=False, hoverinfo="skip"))
+    fig.add_trace(go.Scatter(x=a, y=labels, mode="markers", name=a_name, marker=dict(size=13, color="#b8b2c6"),
+                             hovertemplate="%{y}<br>" + a_name + "：%{x:.1f}" + unit + "<extra></extra>"))
+    fig.add_trace(go.Scatter(x=b, y=labels, mode="markers+text", name=b_name, marker=dict(size=15, color=ACCENT),
+                             text=[f"{x:.1f}" if unit != "%" else f"{x:.0f}%" for x in b], textposition="middle right",
+                             hovertemplate="%{y}<br>" + b_name + "：%{x:.1f}" + unit + "<extra></extra>"))
+    fig.update_yaxes(autorange="reversed", tickfont=dict(size=13, color=INK))
+    fig = style(fig, height)
+    fig.update_layout(legend=dict(orientation="h", y=1.08, x=0), margin=dict(l=8, r=50, t=30, b=8))
+    return fig
+
+
+def team_strengths(row, n=2):
+    """強項與弱項（聯盟第幾名），給雷達圖旁邊的文字用"""
+    r = [(name, int(row[f"rk_{c}"])) for name, c, _ in ss.TEAM_AXES if pd.notna(row.get(f"rk_{c}"))]
+    r.sort(key=lambda x: x[1])
+    return r[:n], r[-n:][::-1]
+
+
+def home_story_cards(S, T, P):
+    """首頁的 3 則本季故事：[(種類, 標題, 一句說明, 圖, 按鈕去哪一頁)]"""
+    cards = []
+    if len(T):
+        top = T.head(5)
+        lead = top.iloc[0]
+        cards.append(("球隊故事", f"目前最像冠軍的是{zh(lead['abbreviation'])}",
+                      f"冠軍指數 {lead['champ_idx']:.0f}（滿分 100），戰績 {int(lead['win'])}-{int(lead['l'])}，"
+                      f"淨效率聯盟第 {int(lead['rk_net_rating'])}。",
+                      hbar([zh(a) for a in top["abbreviation"]], top["champ_idx"],
+                           [ACCENT] + [SEASON_GREY] * (len(top) - 1), [f"{v:.0f}" for v in top["champ_idx"]], 210),
+                      "奪冠列車"))
+        tr = S["teams"].dropna(subset=["trend"]).sort_values("trend", ascending=False).head(5)
+        if len(tr):
+            up = tr.iloc[0]
+            cards.append(("球隊故事", f"{zh(up['abbreviation'])}最近 10 場在加速",
+                          f"最近 10 場平均淨勝 {up['margin_l10']:+.1f} 分，比整季平均多 {up['trend']:.1f} 分。",
+                          hbar([zh(a) for a in tr["abbreviation"]], tr["trend"],
+                               [ACCENT] + [SEASON_GREY] * (len(tr) - 1), [f"{v:+.1f}" for v in tr["trend"]], 210),
+                          "奪冠列車"))
+    hot = ss.hot_players(P, 5) if not P.empty else pd.DataFrame()
+    if len(hot):
+        h = hot.iloc[0]
+        cards.append(("人物故事", f"{h['player_name']} 正在爆發",
+                      f"最近 5 場平均 {h['pts_l5']:.1f} 分，比本季平均多 {h['hot']:.1f} 分（{zh(h['abbreviation'])}）。",
+                      dumbbell(list(hot["player_name"]), hot["pts_avg"], hot["pts_l5"],
+                               "本季平均", "最近 5 場", 230, " 分"),
+                      "焦點人物"))
+    return cards
+
+
+def champ_label(season, abbr):
+    return f"{season} {zh(abbr)}"
+
+
+# =====================================================================
 # 首頁：像 YouTube 首頁一樣的卡片牆，一張卡＝一個研究問題
 # =====================================================================
 def home_findings():
@@ -1100,53 +1333,279 @@ def home_findings():
 
 
 if PAGE == HOME:
-    # ===== 本週發現（左邊大的）＋重點發現清單（右邊）：1030-7 =====
+    # ===== 1. 本季故事：每天用數據挑 3 則（球隊 2、人物 1）=====
+    S = season_data()
+    st.markdown('<div class="home-group" style="margin-top:0">本季故事</div>', unsafe_allow_html=True)
+    if S is None:
+        st.info("本季的比賽數據還沒載入。每天 15:30 自動更新後就會出現本季故事。")
+    else:
+        T = S["teams"].dropna(subset=["champ_idx"]).sort_values("champ_idx", ascending=False)
+        P = S["players"]
+        st.caption(f"{S['season']} 球季，資料更新到 {S['last_day']:%Y-%m-%d}（美國比賽日），已打 {S['n_games']} 場。"
+                   "每則故事都只用數據寫，點按鈕看完整的圖。")
+        cards = []
+        try:
+            cards = home_story_cards(S, T, P)
+        except Exception as e:   # 故事卡出錯也不影響下面的入口
+            st.caption(f"本季故事暫時無法顯示：{type(e).__name__}")
+        cols = st.columns(len(cards) or 1, gap="medium")
+        for col_, (kind, title, sub, fig, page) in zip(cols, cards):
+            with col_:
+                st.markdown(f'<div class="feature"><div class="feature-top">{kind}</div><div class="feature-body">'
+                            f'<div class="feature-title" style="font-size:1.2rem">{title}</div>'
+                            f'<div class="feature-text">{sub}</div></div></div>', unsafe_allow_html=True)
+                st.plotly_chart(fig, width="stretch", config={"displayModeBar": False}, key=f"home_{title}")
+                st.button(f"看「{page}」　→", key=f"story_{title}", on_click=goto, args=(page,), type="primary")
+    # ===== 2. 六個入口 =====
+    st.markdown('<div class="home-group">六個入口</div>', unsafe_allow_html=True)
+    ENTRY = [("每日戰報", "昨晚發生什麼事？", "全聯盟比分、比賽走勢、關鍵時刻、下一場預測與預測準不準。"),
+             ("奪冠列車", "今年誰最像冠軍？", "用歷屆冠軍的六項標準衡量本季 30 隊，每隊一張雷達圖。"),
+             ("焦點人物", "本季誰最值得看？", "爆發中、不可或缺、關鍵先生；每位球員的雷達圖與完整數據。"),
+             ("冠軍故事", "冠軍是怎麼贏的？", f"28 個研究問題分成 5 章：{'、'.join(CHAPTERS)}。"),
+             ("資料與探索", "想自己查？", "球季趨勢、熱力圖、冠軍球季比較、球員、數據表下載。")]
+    cols = st.columns(3, gap="medium")
+    for i, (name, q_, desc) in enumerate(ENTRY):
+        with cols[i % 3]:
+            st.markdown(f'<div class="card"><div class="card-body"><div class="card-title">{name}</div>'
+                        f'<div class="card-q">{q_}</div><div class="card-desc">{desc}</div></div></div>',
+                        unsafe_allow_html=True)
+            st.button(f"前往「{name}」", key=f"entry_{name}", width="stretch", on_click=goto, args=(dict(NAV)[name],))
+    # ===== 3. 歷史的重點發現（奪冠列車的標準從這裡來）=====
     finds = home_findings()
     if finds:
-        import datetime as _dt
-        pick = _dt.date.today().isocalendar()[1] % len(finds)      # 每週自動換一則
-        fp, ft, fx = finds[pick]
-        left, right = st.columns([3, 2], gap="large")
-        with left:
-            st.markdown(f'<div class="feature"><div class="feature-top">本週發現</div><div class="feature-body">'
-                        f'<div class="feature-title">{ft}</div><div class="feature-text">{fx}</div>'
-                        f'<div class="feature-page">出自：{PAGE_INFO[fp][0]} ／ {fp}</div></div></div>',
+        st.markdown('<div class="home-group">冠軍故事的重點發現（奪冠列車的標準從這裡來）</div>', unsafe_allow_html=True)
+        for i, (p_, t_, x_) in enumerate(finds):
+            st.markdown(f'<div class="headline-item"><div class="hp">{p_}</div><div class="ht">{t_}</div></div>',
                         unsafe_allow_html=True)
-            st.button(f"閱讀「{fp}」　→", key="feat_go", on_click=goto, args=(fp,), type="primary")
-        with right:
-            st.markdown('<div class="home-group" style="margin-top:0">重點發現</div>', unsafe_allow_html=True)
-            for i, (p_, t_, _) in enumerate(finds):
-                if i == pick:
-                    continue
-                st.markdown(f'<div class="headline-item"><div class="hp">{p_}</div><div class="ht">{t_}</div></div>',
-                            unsafe_allow_html=True)
-                try:
-                    st.button("前往　→", key=f"hl_{i}", on_click=goto, args=(p_,), type="tertiary")
-                except Exception:
-                    st.button("前往　→", key=f"hl_{i}", on_click=goto, args=(p_,))
-        st.write("")
-    home = team_raw[team_raw["abbreviation"].isin(ALL_TEAMS) & (team_raw["season_type"] == "Regular Season")]
-    n_titles = sum(1 for s_, a_ in CHAMP_SET if a_ in ALL_TEAMS and s_ in set(ALL_SEASONS))
-    k1, k2, k3, k4 = st.columns(4)
-    kpi(k1, "冠軍隊", f"{len(ALL_TEAMS)} 隊", f"另有 {len(EXTRA_TEAMS)} 隊可加入比較")
-    kpi(k2, "球季", f"{len(ALL_SEASONS)} 季", f"{ALL_SEASONS[0]} ～ {ALL_SEASONS[-1]}")
-    kpi(k3, "比賽場數", f"{int(pd.to_numeric(home['games'], errors='coerce').sum()):,}", "八支冠軍隊的例行賽合計")
-    kpi(k4, "奪冠球季", f"{n_titles} 次", f"八隊在這 {len(ALL_SEASONS)} 季拿下的冠軍")
-    for grp in dict.fromkeys(p[0] for p in PAGES):
-        st.markdown(f'<div class="home-group">{grp}</div>', unsafe_allow_html=True)
-        items = [p for p in PAGES if p[0] == grp]
-        cols = st.columns(3, gap="medium")
-        for i, (_, name, question, desc, _) in enumerate(items):
-            n = PAGES.index(PAGE_INFO[name]) + 1
-            with cols[i % 3]:
-                st.markdown(f'<div class="card"><div class="card-top"><span class="card-num">{n:02d}</span>'
-                            f'</div><div class="card-body">'
-                            f'<div class="card-title">{name}</div><div class="card-q">{question}</div>'
-                            f'<div class="card-desc">{desc}</div></div></div>', unsafe_allow_html=True)
-                st.button(f"前往「{name}」", key=f"card_{name}", width="stretch", on_click=goto, args=(name,))
+            try:
+                st.button("前往　→", key=f"hl_{i}", on_click=goto, args=(p_,), type="tertiary")
+            except Exception:
+                st.button("前往　→", key=f"hl_{i}", on_click=goto, args=(p_,))
     st.markdown('<div class="footnote">DATA · NBA STATS API　｜　STORAGE · SUPABASE　｜　BUILT WITH STREAMLIT</div>',
                 unsafe_allow_html=True)
     st.stop()
+
+
+# ---------- 奪冠列車：今年誰最像冠軍？（2026-11-23 改版新頁）----------
+if PAGE == "奪冠列車":
+    S = season_data()
+    if S is None or S["teams"].empty:
+        st.info("本季的比賽數據還沒載入。每天 15:30 自動更新後就會出現。")
+    elif S["champ_avg"].empty:
+        st.info("歷屆冠軍的標準需要 league_team_seasons 和 champions 兩張表，目前讀不到。")
+    else:
+        T = S["teams"].sort_values("champ_idx", ascending=False).reset_index(drop=True)
+        CP = S["champs_p"]
+        hypothesis("今年誰最像冠軍？",
+                   "歷屆冠軍幾乎都是淨效率聯盟前段、而且六項裡很少有明顯弱點；本季能同時做到的球隊只有少數幾支。")
+        lead = T.iloc[0]
+        k1, k2, k3, k4 = st.columns(4)
+        kpi(k1, "本季已打", f"{S['n_games']} 場", f"資料到 {S['last_day']:%m/%d}")
+        kpi(k2, "最像冠軍", zh(lead["abbreviation"]), f"冠軍指數 {lead['champ_idx']:.0f}")
+        n90 = int((T["champ_idx"] >= 90).sum())
+        kpi(k3, "冠軍指數 90 以上", f"{n90} 隊", "六項幾乎都不輸歷屆冠軍")
+        kpi(k4, "歷屆冠軍", f"{len(CP)} 位", f"{CP['season'].min()} ～ {CP['season'].max()}")
+
+        # ===== 1. 冠軍指數排行 =====
+        slot1 = section("1　奪冠列車：30 隊離冠軍標準有多遠",
+                        "冠軍指數 100＝六項都不輸歷屆冠軍的平均；每輸一項就扣分。紫色＝前 4 名（列車的車頭）。"
+                        "冠軍指數怎麼算：六項各換成「贏過聯盟幾 % 的球隊」（0～100），和歷屆冠軍平均比；"
+                        "只要不輸就不扣分，輸多少扣多少，六項扣分平均後用 100 減掉。", anchor="train1")
+        cols_ = [ACCENT if i < 4 else SEASON_GREY for i in range(len(T))]
+        txt = [f"{v:.0f}　{int(w)}-{int(l)}" for v, w, l in zip(T["champ_idx"], T["win"], T["l"])]
+        st.plotly_chart(hbar([zh(a) for a in T["abbreviation"]], T["champ_idx"], cols_, txt, 26 * len(T) + 40),
+                        width="stretch", config={"displayModeBar": False})
+        top4 = "、".join(zh(a) for a in T["abbreviation"].head(4))
+        lines = [f"目前最像冠軍的是{zh(lead['abbreviation'])}（冠軍指數 {lead['champ_idx']:.0f}，戰績 {int(lead['win'])}-{int(lead['l'])}）",
+                 f"列車前 4 名：{top4}。冠軍指數 90 以上的有 {n90} 隊。"]
+        insight(lines, where=slot1, check=(
+            f"歷屆冠軍的淨效率排名中位數是第 {CP['rk_net_rating'].median():.0f} 名；"
+            f"本季冠軍指數前 4 名裡，有 {int((T.head(4)['rk_net_rating'] <= 10).sum())} 隊淨效率在聯盟前 10。"))
+
+        # ===== 2. 雷達圖 =====
+        slot2 = section("2　每一隊的六角輪廓：和歷屆冠軍比", "紫色＝這一隊；灰色虛線＝歷屆冠軍平均；淡紫點線＝輪廓最像的那一位冠軍。"
+                        "外圈＝這一項聯盟最好，中間圈＝聯盟中間。", anchor="train2")
+        pick = st.selectbox("選一支球隊", list(T["abbreviation"]), index=0, key="train_team",
+                            format_func=lambda a: f"{zh(a)}（冠軍指數 {T.set_index('abbreviation').loc[a, 'champ_idx']:.0f}）")
+        row = T.set_index("abbreviation").loc[pick]
+        like = ss.most_like(row, CP)
+        traces = [(zh(pick), [row[f"p_{c}"] for _, c, _ in ss.TEAM_AXES], ACCENT, "solid", True),
+                  ("歷屆冠軍平均", [S["champ_avg"][f"p_{c}"] for _, c, _ in ss.TEAM_AXES], CHAMP_LINE, "dash", False)]
+        if like:
+            lr = CP[(CP["season"] == like[0]) & (CP["abbreviation"] == like[1])].iloc[0]
+            traces.append((f"最像：{champ_label(like[0], like[1])}", [lr[f"p_{c}"] for _, c, _ in ss.TEAM_AXES],
+                           "#b9a6f0", "dot", False))
+        cA, cB = st.columns([3, 2], gap="large")
+        with cA:
+            st.plotly_chart(radar(traces, 430), width="stretch", config={"displayModeBar": False})
+        with cB:
+            good, bad = team_strengths(row)
+            st.markdown(f'<div class="feature"><div class="feature-top">{zh(pick)}　{int(row["win"])}-{int(row["l"])}</div>'
+                        f'<div class="feature-body"><div class="feature-text">'
+                        f'<b>強項</b>：{"、".join(f"{n}（聯盟第 {r}）" for n, r in good)}<br>'
+                        f'<b>弱項</b>：{"、".join(f"{n}（聯盟第 {r}）" for n, r in bad)}<br>'
+                        f'<b>淨效率</b>：{row["net_rating"]:+.1f}（聯盟第 {int(row["rk_net_rating"])}）<br>'
+                        + (f'<b>最像的冠軍</b>：{champ_label(like[0], like[1])}<br>' if like else "")
+                        + f'<b>冠軍指數</b>：{row["champ_idx"]:.0f}</div></div></div>', unsafe_allow_html=True)
+        lacks = [n for n, c, _ in ss.TEAM_AXES if row[f"p_{c}"] < S["champ_avg"][f"p_{c}"] - 10]
+        insight([f"{zh(pick)}的輪廓最像 {champ_label(like[0], like[1])}" if like else f"{zh(pick)}的六角輪廓",
+                 ("和歷屆冠軍平均比，明顯落後的是：" + "、".join(lacks) + "。") if lacks else "六項都沒有明顯落後歷屆冠軍平均。"],
+                where=slot2, to_summary=False)
+        with st.expander("六項的數字與排名（全部 30 隊）"):
+            nice_table(pd.DataFrame({
+                "球隊": [zh(a) for a in T["abbreviation"]], "_key": T["abbreviation"],
+                "戰績": [f"{int(w)}-{int(l)}" for w, l in zip(T["win"], T["l"])],
+                "冠軍指數": [f"{v:.0f}" for v in T["champ_idx"]],
+                "進攻效率": [f"{v:.1f}（{int(r)}）" for v, r in zip(T["off_rating"], T["rk_off_rating"])],
+                "防守效率": [f"{v:.1f}（{int(r)}）" for v, r in zip(T["def_rating"], T["rk_def_rating"])],
+                "三分命中率": [f"{v:.1%}（{int(r)}）" for v, r in zip(T["fg3_pct"], T["rk_fg3_pct"])],
+                "籃板率": [f"{v:.1%}（{int(r)}）" for v, r in zip(T["reb_pct"], T["rk_reb_pct"])],
+                "助攻比例": [f"{v:.1%}（{int(r)}）" for v, r in zip(T["ast_ratio"], T["rk_ast_ratio"])],
+                "失誤率": [f"{v:.1%}（{int(r)}）" for v, r in zip(T["tov_pct"], T["rk_tov_pct"])],
+            }), num_cols=("冠軍指數", "進攻效率", "防守效率", "三分命中率", "籃板率", "助攻比例", "失誤率"),
+                dot_col="球隊", colors=TEAM_COLORS)
+            st.caption("括號＝聯盟第幾名。助攻比例＝投進的球裡有幾成是助攻來的；失誤率＝每回合失誤的比例（越低越好）。")
+
+        # ===== 3. 最近 10 場 =====
+        slot3 = section("3　誰在加速、誰在減速", "最近 10 場的平均淨勝分，比整季平均多（右）或少（左）幾分。紫色＝加速最多的 3 隊。",
+                        anchor="train3")
+        R = S["teams"].dropna(subset=["trend"]).sort_values("trend", ascending=False)
+        cols_ = [ACCENT if i < 3 else SEASON_GREY for i in range(len(R))]
+        st.plotly_chart(hbar([zh(a) for a in R["abbreviation"]], R["trend"], cols_, [f"{v:+.1f}" for v in R["trend"]],
+                             26 * len(R) + 40, zero=True), width="stretch", config={"displayModeBar": False})
+        if len(R):
+            u, d_ = R.iloc[0], R.iloc[-1]
+            insight([f"{zh(u['abbreviation'])}最近 10 場比整季平均多淨勝 {u['trend']:.1f} 分，加速最多",
+                     f"減速最多的是{zh(d_['abbreviation'])}（{d_['trend']:+.1f} 分）。開季前幾週場數少，這個數字變動會比較大。"],
+                    where=slot3)
+
+# ---------- 焦點人物：本季誰最值得看？（2026-11-23 改版新頁）----------
+if PAGE == "焦點人物":
+    S = season_data()
+    P = S["players"] if S else pd.DataFrame()
+    if S is None or P.empty:
+        st.info("本季的球員數據還沒載入。每天 15:30 自動更新後就會出現。")
+    else:
+        Q = P[P["qualified"]]
+        st.caption(f"{S['season']} 球季，資料到 {S['last_day']:%Y-%m-%d}。夠格球員＝出賽至少本季場數的 4 成、"
+                   f"場均 15 分鐘以上（目前 {len(Q)} 人）；排名只在夠格球員裡比。")
+        hot = ss.hot_players(P, 8)
+        ww = ss.with_without(S["pg"], S["tg"], P)
+        cl = ss.clutch_table(cur_clutch(S["season"]))
+        # ===== 0. 三種人物 =====
+        c1, c2, c3 = st.columns(3, gap="medium")
+        if len(hot):
+            h = hot.iloc[0]
+            c1.markdown(f'<div class="feature"><div class="feature-top">爆發中</div><div class="feature-body">'
+                        f'<div class="feature-title" style="font-size:1.2rem">{h["player_name"]}</div>'
+                        f'<div class="feature-text">{zh(h["abbreviation"])}｜最近 5 場 {h["pts_l5"]:.1f} 分，'
+                        f'比本季平均多 {h["hot"]:.1f} 分</div></div></div>', unsafe_allow_html=True)
+        if len(ww):
+            w_ = ww.iloc[0]
+            c2.markdown(f'<div class="feature"><div class="feature-top">不可或缺</div><div class="feature-body">'
+                        f'<div class="feature-title" style="font-size:1.2rem">{w_["player_name"]}</div>'
+                        f'<div class="feature-text">{zh(w_["abbreviation"])}｜有他勝率 {w_["w_on"]:.0%}、'
+                        f'沒他 {w_["w_off"]:.0%}（缺陣 {int(w_["g_off"])} 場）</div></div></div>', unsafe_allow_html=True)
+        if len(cl):
+            c_ = cl.iloc[0]
+            c3.markdown(f'<div class="feature"><div class="feature-top">關鍵先生</div><div class="feature-body">'
+                        f'<div class="feature-title" style="font-size:1.2rem">{c_["player_name"]}</div>'
+                        f'<div class="feature-text">{zh(c_["team_abbr"])}｜關鍵時刻得 {int(c_["pts"])} 分，'
+                        f'聯盟最多</div></div></div>', unsafe_allow_html=True)
+
+        # ===== 1. 爆發中 =====
+        if len(hot):
+            slot = section("1　爆發中：最近 5 場比本季平均多得最多分", "灰點＝本季平均、紫點＝最近 5 場；線越長，進步越多。"
+                           "只看夠格、而且最近 10 天有上場的球員。", anchor="ppl1")
+            st.plotly_chart(dumbbell([f"{n}（{zh(a)}）" for n, a in zip(hot["player_name"], hot["abbreviation"])],
+                                     hot["pts_avg"], hot["pts_l5"], "本季平均", "最近 5 場", 44 * len(hot) + 60, " 分"),
+                            width="stretch", config={"displayModeBar": False})
+            h = hot.iloc[0]
+            insight([f"{h['player_name']} 最近 5 場平均 {h['pts_l5']:.1f} 分，比本季平均多 {h['hot']:.1f} 分"], where=slot)
+        # ===== 2. 不可或缺 =====
+        if len(ww):
+            W = ww.head(8)
+            slot = section("2　不可或缺：少了他，球隊勝率掉最多", "灰點＝他缺陣時球隊的勝率、紫點＝他有上場時；"
+                           "只看場均 25 分鐘以上、至少缺陣 3 場的球員（從他本季第一次上場後算）。", anchor="ppl2")
+            st.plotly_chart(dumbbell([f"{n}（{zh(a)}）" for n, a in zip(W["player_name"], W["abbreviation"])],
+                                     W["w_off"] * 100, W["w_on"] * 100, "他缺陣時", "他上場時", 44 * len(W) + 60, "%"),
+                            width="stretch", config={"displayModeBar": False})
+            w_ = W.iloc[0]
+            insight([f"{w_['player_name']} 上場時{zh(w_['abbreviation'])}勝率 {w_['w_on']:.0%}，缺陣時只有 {w_['w_off']:.0%}",
+                     f"他缺陣 {int(w_['g_off'])} 場、上場 {int(w_['g_on'])} 場。缺陣場數少，數字只能當參考；"
+                     "也可能剛好遇到強隊（「冠軍故事 ／ 缺陣場的對手」有扣掉對手強弱的方法）。"], where=slot)
+        # ===== 3. 關鍵先生 =====
+        if len(cl):
+            C = cl.head(10)
+            slot = section("3　關鍵先生：關鍵時刻得分最多", "關鍵時刻＝第四節或延長賽最後 5 分鐘、得分前分差 5 分以內。"
+                           "紫色＝前 3 名。", anchor="ppl3")
+            st.plotly_chart(hbar([f"{n}（{zh(a)}）" for n, a in zip(C["player_name"], C["team_abbr"])], C["pts"],
+                                 [ACCENT if i < 3 else SEASON_GREY for i in range(len(C))],
+                                 [f"{int(v)} 分（{int(g)} 場）" for v, g in zip(C["pts"], C["games"])], 30 * len(C) + 40),
+                            width="stretch", config={"displayModeBar": False})
+            insight([f"本季關鍵時刻得分最多的是 {C.iloc[0]['player_name']}（{int(C.iloc[0]['pts'])} 分）"], where=slot)
+
+        # ===== 4. 球員雷達圖＋完整數據 =====
+        slot = section("4　球員雷達圖", "外圈＝這一項在夠格球員裡最好；灰色虛線＝聯盟中間（贏過一半的人）。點下方「完整數據」看所有傳統與進階數據。",
+                       anchor="ppl4")
+        Qs = Q.sort_values("pts_g", ascending=False)
+        default = hot.iloc[0]["player_id"] if len(hot) else Qs.iloc[0]["player_id"]
+        names = dict(zip(Qs["player_id"], [f"{n}（{zh(a)}，{v:.1f} 分）" for n, a, v in
+                                           zip(Qs["player_name"], Qs["abbreviation"], Qs["pts_g"])]))
+        ids = list(Qs["player_id"])
+        pid = st.selectbox("選一位球員（依場均得分排序）", ids, index=ids.index(default) if default in ids else 0,
+                           format_func=lambda i: names.get(i, str(i)), key="ppl_pick")
+        r = P.set_index("player_id").loc[pid]
+        cA, cB = st.columns([3, 2], gap="large")
+        with cA:
+            st.plotly_chart(radar([(r["player_name"], [r[f"p_{c}"] for _, c, _ in ss.PLAYER_AXES], ACCENT, "solid", True),
+                                   ("聯盟中間", [50] * 6, CHAMP_LINE, "dash", False)], 420),
+                            width="stretch", config={"displayModeBar": False})
+        with cB:
+            lab = {"pts": "得分", "stocks": "抄截＋阻攻", "fg3m": "三分命中", "reb": "籃板", "ast": "助攻", "tov": "失誤"}
+            items = "".join(f'<b>{n}</b>（{lab[c]}）　{(r["stocks"] if c == "stocks" else r[f"{c}_g"]):.1f}'
+                            f'　第 {int(r[f"rk_{c}"])}<br>' for n, c, _ in ss.PLAYER_AXES if pd.notna(r.get(f"rk_{c}")))
+            st.markdown(f'<div class="feature"><div class="feature-top">{r["player_name"]}　{zh(r["abbreviation"])}</div>'
+                        f'<div class="feature-body"><div class="feature-text">{items}'
+                        f'<span style="color:var(--ink-2)">場均，括號＝在 {len(Q)} 位夠格球員裡第幾名</span></div></div></div>',
+                        unsafe_allow_html=True)
+        G = ss.player_games(S["pg"], pid).tail(10)
+        if len(G):
+            fig = go.Figure(go.Bar(x=[f"{d:%m/%d}" for d in G["game_date"]], y=G["pts"], marker_color=ACCENT,
+                                   text=[f"{int(v)}" for v in G["pts"]], textposition="outside", cliponaxis=False,
+                                   hovertemplate="%{x}：%{y} 分<extra></extra>"))
+            fig.add_hline(y=r["pts_g"], line=dict(color=CHAMP_LINE, dash="dash"),
+                          annotation_text=f"本季平均 {r['pts_g']:.1f}", annotation_position="top left")
+            fig.update_yaxes(title="得分")
+            st.markdown('<div class="section-sub">最近 10 場得分</div>', unsafe_allow_html=True)
+            st.plotly_chart(style(fig, 240), width="stretch", config={"displayModeBar": False})
+        with st.expander("完整數據：傳統＋進階（點開）"):
+            f1 = lambda v, f=".1f": "-" if pd.isna(v) else format(v, f)
+            st.markdown("**傳統數據（場均）**")
+            nice_table(pd.DataFrame([{
+                "出賽": int(r["gp"]), "分鐘": f1(r["mpg"]), "得分": f1(r["pts_g"]), "籃板": f1(r["reb_g"]),
+                "進攻籃板": f1(r["oreb_g"]), "防守籃板": f1(r["dreb_g"]), "助攻": f1(r["ast_g"]), "抄截": f1(r["stl_g"]),
+                "阻攻": f1(r["blk_g"]), "失誤": f1(r["tov_g"]), "犯規": f1(r["pf_g"]),
+                "投籃": f"{f1(r['fgm_g'])}/{f1(r['fga_g'])}", "三分": f"{f1(r['fg3m_g'])}/{f1(r['fg3a_g'])}",
+                "罰球": f"{f1(r['ftm_g'])}/{f1(r['fta_g'])}", "正負值": f1(r["plus_minus_g"], "+.1f")}]),
+                num_cols=("出賽", "分鐘", "得分", "籃板", "進攻籃板", "防守籃板", "助攻", "抄截", "阻攻", "失誤", "犯規", "正負值"))
+            st.markdown("**命中率**")
+            nice_table(pd.DataFrame([{"投籃命中率": f1(r["fg_pct"], ".1%"), "三分命中率": f1(r["fg3_pct"], ".1%"),
+                                      "罰球命中率": f1(r["ft_pct"], ".1%"), "真實命中率": f1(r["ts"], ".1%"),
+                                      "有效命中率": f1(r["efg"], ".1%")}]),
+                       num_cols=("投籃命中率", "三分命中率", "罰球命中率", "真實命中率", "有效命中率"))
+            st.markdown("**進階數據**")
+            nice_table(pd.DataFrame([{"使用率": f1(r.get("usg"), ".1%"), "三分出手比例": f1(r["tpar"], ".1%"),
+                                      "罰球出手比": f1(r["ftr"], ".2f"), "助攻失誤比": f1(r["ast_to"], ".2f"),
+                                      "每 36 分鐘得分": f1(r["pts_36"]), "每 36 分鐘籃板": f1(r["reb_36"]),
+                                      "每 36 分鐘助攻": f1(r["ast_36"]), "最近 5 場得分": f1(r["pts_l5"])}]),
+                       num_cols=("使用率", "三分出手比例", "罰球出手比", "助攻失誤比", "每 36 分鐘得分", "每 36 分鐘籃板",
+                                 "每 36 分鐘助攻", "最近 5 場得分"))
+            st.markdown('<div class="howread">真實命中率＝把二分、三分、罰球都算進去的命中率；有效命中率＝三分球多算半顆的命中率；'
+                        '使用率＝他在場上時，球隊的回合有幾成由他結束（出手、罰球或失誤）；罰球出手比＝每次投籃出手對應幾次罰球；'
+                        '每 36 分鐘＝把數據換算成打滿 36 分鐘，替補和先發可以公平比較。</div>', unsafe_allow_html=True)
+
+
 
 
 # ---------- 0. 冠軍密碼：三個問題 ----------
@@ -9396,6 +9855,22 @@ SOURCES["二號與三號得分手"] = (
     "每一輪都和他自己這一季例行賽比；第 1 節只留冠軍和贏下這一輪的球隊，命中率依出手數、得分佔比依場數、其他依上場場數加權；"
     "第 2 節每場得分用球隊場數算（缺陣算 0 分），趨勢線是最小平方法直線。限制：一輪只有 4～7 場；看不出對手是不是真的包夾頭號得分手。")
 
+
+RELATED["奪冠列車"] = [("冠軍密碼", "冠軍的標準從哪裡來：淨效率最關鍵"), ("防守端", "冠軍的防守強在哪裡"), ("焦點人物", "本季值得看的球員")]
+SOURCES["奪冠列車"] = (
+    "recap_team_games（本季每場 × 每隊，每天 15:30 更新）、league_team_seasons＋champions（歷屆冠軍的標準）",
+    "本季例行賽；歷屆冠軍＝資料庫裡所有冠軍的例行賽",
+    "回合數＝投籃出手 − 進攻籃板 ＋ 失誤 ＋ 0.44 × 罰球出手；進攻效率＝得分 ÷ 回合 × 100；防守效率＝對手得分 ÷ 對手回合 × 100；"
+    "籃板＝進攻籃板率與防守籃板率的平均；助攻比例＝助攻 ÷ 投籃命中；失誤率＝失誤 ÷ 回合。六項各換成百分等級（0～100，"
+    "贏過聯盟幾 % 的球隊），冠軍指數＝100 − 六項「落後歷屆冠軍平均的分數」的平均（不落後就是 0）；最像的冠軍＝六項百分等級的距離最近。")
+RELATED["焦點人物"] = [("頭號得分手缺陣", "歷屆冠軍少了頭號得分手時勝率掉多少"), ("得分穩定度", "冠軍球星比較不會爆冷嗎"),
+                    ("奪冠列車", "這些球員的球隊離冠軍多遠")]
+SOURCES["焦點人物"] = (
+    "recap_player_games（本季每場 × 每位球員）、recap_team_games（球隊勝負、全隊出手）、pbp_events（關鍵時刻得分）",
+    "本季例行賽；夠格球員＝出賽至少本季場數的 4 成、場均 15 分鐘以上",
+    "爆發中＝最近 5 場平均得分 − 本季平均；不可或缺＝他上場時球隊勝率 − 他缺陣時（從他本季第一次上場後算，場均 25 分鐘以上、"
+    "至少缺陣 3 場）；關鍵時刻＝第四節或延長賽最後 5 分鐘、得分前分差 5 分以內；雷達圖六項是場均數據在夠格球員裡的百分等級（失誤越少越好）；"
+    "使用率＝（投籃出手 ＋ 0.44 × 罰球出手 ＋ 失誤）×（全隊分鐘 ÷ 5）÷［上場分鐘 ×（全隊出手 ＋ 0.44 × 全隊罰球 ＋ 全隊失誤）］。")
 
 finish_page()
 st.markdown('<div class="footnote">DATA · NBA STATS API　｜　STORAGE · SUPABASE　｜　BUILT WITH STREAMLIT</div>',
