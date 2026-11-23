@@ -8,7 +8,8 @@
 會依序執行：
   0. load_recap.py                              全聯盟本季每場比分與球員數據（每日戰報）
   0a. save_predictions.py --backfill            存下一個比賽日的預測（隔天對答案）；沒存到的過去比賽日會補算
-  0b. load_pbp.py                               最近 3 天比賽的逐回合得分紀錄（比賽走勢、戰報稿）
+  0b. load_pbp.py --all                         本季所有還沒抓過的比賽的逐回合得分紀錄（比賽走勢、戰報稿、焦點人物的關鍵先生）
+                                                已經抓過的會跳過，所以每天只抓新的；電腦關機幾天也會自動補齊
   1. load_to_supabase.py --start <本季開始日>   八隊球員逐場數據、全聯盟球隊數據
   2. load_extra.py --current                    本季的投籃、戰術、陣容、跑動數據
   3. load_to_supabase.py --next 2               再加入 2 支還沒載入的球隊（20 季完整資料）
@@ -63,7 +64,7 @@ def main():
         log.write(title + "\n")
         ok0 = run(["load_recap.py"] + dry, log)            # 每日戰報：全聯盟本季比分（最快，先跑）
         okd = run(["save_predictions.py", "--backfill"] + dry, log)   # 預測先存起來，隔天才能對答案
-        okp = run(["load_pbp.py"] + dry, log)              # 逐回合得分紀錄：補最近 3 天還沒抓的比賽（比賽走勢、戰報稿）
+        okp = run(["load_pbp.py", "--all"] + dry, log)     # 逐回合得分紀錄：本季所有還沒抓過的比賽（抓過的會跳過）
         ok1 = run(["load_to_supabase.py", "--start", start] + dry, log)
         ok2 = run(["load_extra.py", "--current"] + dry, log)
         ok3 = run(["load_to_supabase.py", "--next", str(TEAMS_PER_DAY)] + dry, log)
