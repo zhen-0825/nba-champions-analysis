@@ -246,3 +246,84 @@ def hot_players(p, n=5):
     q = q[recent]
     q["hot"] = q["pts_l5"] - q["pts_avg"]
     return q.sort_values("hot", ascending=False).head(n)
+
+
+# ---------------------------------------------------------------------
+# 本季故事：輸球之後（2026-11-24；11/25 依學習日誌重建，因為 11/24 的檔案沒有進 GitHub）
+# ---------------------------------------------------------------------
+def bounce_table(tg):
+    """每隊一列：整季勝率、輸球後下一場勝率、反彈（百分點）、最長連敗、目前連勝／連敗。只看例行賽"""
+    if tg is None or tg.empty:
+        return pd.DataFrame()
+    d = tg[tg["season_type"] == "Regular Season"] if "season_type" in tg else tg
+    d = d.dropna(subset=["wl"]).sort_values(["abbreviation", "game_date", "game_id"])
+    rows = []
+    for abbr, x in d.groupby("abbreviation"):
+        win = (x["wl"] == "W").astype(int).tolist()
+        after = [w for prev, w in zip(win[:-1], win[1:]) if prev == 0]      # 上一場輸 → 這一場
+        best = cur = 0
+        for w in win:                                                        # 最長連敗
+            cur = 0 if w else cur + 1
+            best = max(best, cur)
+        run = 1
+        while run < len(win) and win[-1 - run] == win[-1]:                   # 目前連勝／連敗
+            run += 1
+        pct = float(np.mean(win)) if win else np.nan
+        aft = float(np.mean(after)) if after else np.nan
+        rows.append({"abbreviation": abbr, "g": len(win), "win": int(sum(win)), "l": len(win) - int(sum(win)),
+                     "win_pct": pct, "aft_g": len(after), "aft_w": int(sum(after)), "aft_pct": aft,
+                     "bounce": (aft - pct) * 100 if after else np.nan, "max_lose": best,
+                     "streak": ("連勝" if win and win[-1] else "連敗") + f" {run}" if win else ""})
+    return pd.DataFrame(rows)
+
+
+# ---------------------------------------------------------------------
+# 本季故事：賽程來了——未來 7 天誰最累（2026-11-25）
+# ---------------------------------------------------------------------
+def rest_split(tg):
+    """本季到目前：背靠背第二場（休息 0 天）vs 有休息（1 天以上）的勝率。回傳 dict"""
+    if tg is None or tg.empty:
+        return {}
+    d = tg[tg["season_type"] == "Regular Season"] if "season_type" in tg else tg
+    d = d.dropna(subset=["wl"]).sort_values(["abbreviation", "game_date"]).copy()
+    d["rest"] = d.groupby("abbreviation")["game_date"].diff().dt.days - 1      # 和上一場差幾天，再減 1
+    d = d.dropna(subset=["rest"])
+    d["w"] = (d["wl"] == "W").astype(int)
+    b2b, rested = d[d["rest"] == 0], d[d["rest"] >= 1]
+    if b2b.empty or rested.empty:
+        return {}
+    return {"b2b_g": len(b2b), "b2b_pct": b2b["w"].mean(), "rest_g": len(rested), "rest_pct": rested["w"].mean(),
+            "gap": (rested["w"].mean() - b2b["w"].mean()) * 100}
+
+
+def schedule_load(sched, tg, start, days=7):
+    """未來 days 天（start 之後，不含 start）每隊的賽程負擔。
+    sched＝recap_schedule（一場一列：主隊、客隊）；tg＝recap_team_games（找每隊最後一場已打完的日期）。
+    背靠背＝和前一場只差 1 天；第一場也和「最後一場已打完的比賽」比，所以昨天打、明天又打也算。
+    回傳 (每隊一列的摘要, 每隊每場一列的明細)"""
+    if sched is None or sched.empty:
+        return pd.DataFrame(), pd.DataFrame()
+    start = pd.Timestamp(start).normalize()
+    end = start + pd.Timedelta(days=days)
+    s = sched.copy()
+    s["game_date"] = pd.to_datetime(s["game_date"])
+    s = s[(s["game_date"] > start) & (s["game_date"] <= end)].drop_duplicates("game_id")
+    if s.empty:
+        return pd.DataFrame(), pd.DataFrame()
+    home = pd.DataFrame({"abbreviation": s["home_abbr"], "game_date": s["game_date"], "is_home": True, "opp": s["away_abbr"]})
+    away = pd.DataFrame({"abbreviation": s["away_abbr"], "game_date": s["game_date"], "is_home": False, "opp": s["home_abbr"]})
+    g = pd.concat([home, away]).dropna(subset=["abbreviation"]).sort_values(["abbreviation", "game_date"])
+    last = tg.groupby("abbreviation")["game_date"].max() if tg is not None and not tg.empty else pd.Series(dtype="datetime64[ns]")
+    g["prev"] = g.groupby("abbreviation")["game_date"].shift(1)
+    g["prev"] = g["prev"].fillna(g["abbreviation"].map(last))                  # 第一場：和最後一場已打完的比
+    g["b2b"] = (g["game_date"] - g["prev"]).dt.days == 1
+    out = g.groupby("abbreviation").agg(games=("game_date", "size"), b2b=("b2b", "sum"),
+                                         away=("is_home", lambda x: int((~x.astype(bool)).sum()))).reset_index()
+    out["b2b"] = out["b2b"].astype(int)
+    out["home"] = out["games"] - out["away"]
+    # 所有球隊都列出來（未來 7 天沒比賽的也算 0 場）
+    teams = sorted(set(tg["abbreviation"].dropna())) if tg is not None and not tg.empty else []
+    out = pd.DataFrame({"abbreviation": teams}).merge(out, how="left", on="abbreviation") if teams else out
+    out[["games", "b2b", "away", "home"]] = out[["games", "b2b", "away", "home"]].fillna(0).astype(int)
+    out = out.sort_values(["b2b", "games", "away"], ascending=False).reset_index(drop=True)
+    return out, g.reset_index(drop=True)

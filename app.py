@@ -1165,6 +1165,15 @@ def cur_clutch(season):
     return _rf("pbp_events", [("eq", "season", season), ("eq", "is_clutch", True)], ["game_id", "action_number"])
 
 
+@st.cache_data(ttl=900, show_spinner="讀取未來賽程中…")
+def cur_schedule(season):
+    """recap_schedule：接下來 7 天的賽程（load_recap.py 每天寫入）；表不存在時回傳空表格"""
+    df = _rf("recap_schedule", [("eq", "season", season)], ["game_date", "game_id"])
+    if not df.empty:
+        df["game_date"] = pd.to_datetime(df["game_date"])
+    return df
+
+
 def season_data():
     """本季的所有表格，一次準備好；資料庫還沒有本季資料、或計算出錯時回傳 None（頁面改顯示提示，不會整頁壞掉）"""
     try:
@@ -1478,6 +1487,116 @@ if PAGE == "奪冠列車":
             insight([f"{zh(u['abbreviation'])}最近 10 場比整季平均多淨勝 {u['trend']:.1f} 分，加速最多",
                      f"減速最多的是{zh(d_['abbreviation'])}（{d_['trend']:+.1f} 分）。開季前幾週場數少，這個數字變動會比較大。"],
                     where=slot3)
+
+
+        # ===== 4. 輸球之後（2026-11-24 本季故事；11/25 重建）=====
+        slot4 = section("4　輸球之後：誰最會馬上贏回來",
+                        "列車前 8 名。灰點＝整季勝率，紫點＝輸球後下一場的勝率；紫點在灰點右邊＝輸完特別會贏。"
+                        "括號＝本季最長連敗。輸球後少於 3 場的隊先不畫（一場就差 30 幾個百分點，太不穩）。", anchor="train4")
+        B = ss.bounce_table(S["tg"])
+        top8 = list(T["abbreviation"].head(8))
+        Bt = B.set_index("abbreviation").reindex(top8).dropna(subset=["aft_pct"]) if not B.empty else B
+        Bt = Bt[Bt["aft_g"] >= 3].sort_values("bounce", ascending=False) if len(Bt) else Bt
+        if len(Bt) == 0:
+            insight(["還沒有足夠的輸球場次：列車前 8 名輸球後的下一場都還不到 3 場，等多打幾場再看。"], where=slot4)
+        else:
+            st.plotly_chart(dumbbell([f"{zh(a)}（最長連敗 {int(r.max_lose)}）" for a, r in Bt.iterrows()],
+                                     Bt["win_pct"] * 100, Bt["aft_pct"] * 100, "整季勝率", "輸球後下一場", 46 * len(Bt) + 70, "%"),
+                            width="stretch", config={"displayModeBar": False})
+            b0 = Bt.iloc[0]
+            insight([f"{zh(Bt.index[0])}輸球後下一場贏 {int(b0.aft_w)}/{int(b0.aft_g)}，比自己整季勝率高 {b0.bounce:.0f} 個百分點，最會馬上贏回來",
+                     f"列車前 8 名裡，最長連敗只有 1 場的：{'、'.join(zh(a) for a, r in Bt.iterrows() if r.max_lose <= 1) or '沒有'}。"
+                     "開季場數少，一場就會讓數字大幅變動。"], where=slot4)
+            with st.expander("全部 30 隊：輸球之後的下一場"):
+                Ba = B.sort_values(["bounce"], ascending=False)
+                nice_table(pd.DataFrame({
+                    "球隊": [zh(a) for a in Ba["abbreviation"]], "_key": Ba["abbreviation"],
+                    "戰績": [f"{w}-{l}" for w, l in zip(Ba["win"], Ba["l"])],
+                    "輸球後下一場": [f"{w}-{g - w}" if g else "—" for w, g in zip(Ba["aft_w"], Ba["aft_g"])],
+                    "反彈（百分點）": [f"{v:+.0f}" if pd.notna(v) else "—" for v in Ba["bounce"]],
+                    "最長連敗": [f"{v} 場" for v in Ba["max_lose"]], "目前": Ba["streak"]}),
+                    num_cols=("戰績", "輸球後下一場", "反彈（百分點）", "最長連敗"), signed_cols=("反彈（百分點）",),
+                    dot_col="球隊", colors=TEAM_COLORS)
+        st.button("歷史證據：冠軍輸球後會馬上反彈嗎？ → 冠軍故事 ／ 輸球之後", key="train_to_bounce",
+                  on_click=goto, args=("輸球之後",))
+
+        # ===== 5. 賽程來了：未來 7 天誰最累（2026-11-25 本季故事）=====
+        slot5 = section("5　賽程來了：未來 7 天誰最累",
+                        "每一列是一支球隊，每個點是一場比賽（上面的字＝對手，@＝客場）。"
+                        "紫色連線＝背靠背（連兩天出賽）；空心點＝最後一場已打完的比賽。只列出未來 7 天有背靠背的球隊。",
+                        anchor="train5")
+        SC = cur_schedule(S["season"])
+        start = S["last_day"]
+        LD, GD = ss.schedule_load(SC, S["tg"], start, 7)
+        if LD.empty:
+            insight(["還沒有未來賽程：recap_schedule 這張表是空的或不存在。每天 15:30 自動更新（load_recap.py）後就會出現；"
+                     "如果一直沒有，請先在 Supabase 執行 schema_schedule.sql。"], where=slot5)
+        else:
+            rank8 = {a: i + 1 for i, a in enumerate(T["abbreviation"])}
+            busy = LD[LD["b2b"] > 0]
+            if busy.empty:
+                insight([f"未來 7 天（{start + pd.Timedelta(days=1):%m/%d}～{start + pd.Timedelta(days=7):%m/%d}）沒有球隊背靠背",
+                         f"場數最多的是{zh(LD.iloc[0]['abbreviation'])}（{int(LD.iloc[0]['games'])} 場）。"], where=slot5)
+            else:
+                order = list(busy["abbreviation"])
+                lab = {a: f"{zh(a)}（列車第 {rank8.get(a, '–')}）" for a in order}
+                fig = go.Figure()
+                for a in order:
+                    x = GD[GD["abbreviation"] == a]
+                    y = lab[a]
+                    for r in x[x["b2b"]].itertuples():          # 背靠背：前一場和這一場連一條紫線
+                        fig.add_trace(go.Scatter(x=[r.prev, r.game_date], y=[y, y], mode="lines",
+                                                 line=dict(color=ACCENT, width=5), hoverinfo="skip", showlegend=False))
+                        if r.prev <= start:                         # 前一場已打完：空心點
+                            fig.add_trace(go.Scatter(x=[r.prev], y=[y], mode="markers", showlegend=False,
+                                                     marker=dict(size=12, color="white", line=dict(color=ACCENT, width=2)),
+                                                     hovertemplate=f"{zh(a)}　%{{x|%m/%d}} 已打完<extra></extra>"))
+                    in_b2b = set(x.loc[x["b2b"], "game_date"]) | set(x.loc[x["b2b"], "prev"])
+                    fig.add_trace(go.Scatter(
+                        x=x["game_date"], y=[y] * len(x), mode="markers+text", showlegend=False,
+                        marker=dict(size=13, color=[ACCENT if d in in_b2b else "#b8b2c6" for d in x["game_date"]]),
+                        text=[("vs " if h else "@") + o for h, o in zip(x["is_home"], x["opp"])], textposition="top center",
+                        textfont=dict(size=11, color=INK),
+                        hovertemplate=[f"{zh(a)}　%{{x|%m/%d}}　{'主場對' if h else '客場對'}{zh(o)}<extra></extra>"
+                                       for h, o in zip(x["is_home"], x["opp"])]))
+                for r in busy.itertuples():                          # 右邊直接寫「幾組背靠背」
+                    fig.add_annotation(x=start + pd.Timedelta(days=7.6), y=lab[r.abbreviation], xanchor="left",
+                                       text=f"<b>{r.b2b} 組</b>　{r.games} 場（客 {r.away}）", showarrow=False,
+                                       font=dict(size=12, color=ACCENT if r.b2b == busy["b2b"].max() else INK))
+                fig.update_yaxes(autorange="reversed", tickfont=dict(size=13, color=INK),
+                                 categoryorder="array", categoryarray=[lab[a] for a in order])
+                fig.update_xaxes(range=[start - pd.Timedelta(days=0.5), start + pd.Timedelta(days=9.6)],
+                                 tickformat="%m/%d", dtick=86400000, showgrid=True)
+                fig = style(fig, 44 * len(order) + 80)
+                fig.update_layout(margin=dict(l=8, r=8, t=24, b=8))
+                st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
+                mx = busy["b2b"].max()
+                most = [zh(a) for a in busy[busy["b2b"] == mx]["abbreviation"]]
+                tops = [a for a in T["abbreviation"].head(8)]
+                t_b2b = [f"{zh(a)}（{int(LD.set_index('abbreviation').loc[a, 'b2b'])} 組）" for a in tops
+                         if a in set(busy["abbreviation"])]
+                easy = LD[LD["abbreviation"].isin(tops)].sort_values(["b2b", "games"]).iloc[0]
+                rs = ss.rest_split(S["tg"])
+                insight([f"未來 7 天背靠背最多的是{'、'.join(most)}（{mx} 組），賽程最累",
+                         ("列車前 8 名裡有背靠背的：" + "、".join(t_b2b) + "。" if t_b2b else "列車前 8 名未來 7 天都沒有背靠背。")
+                         + f"前 8 名裡賽程最輕鬆的是{zh(easy['abbreviation'])}（{int(easy['games'])} 場、{int(easy['b2b'])} 組背靠背）。"],
+                        where=slot5,
+                        check=(f"本季到目前，背靠背第二場的勝率 {rs['b2b_pct']:.0%}（{rs['b2b_g']} 場），有休息的 {rs['rest_pct']:.0%}（{rs['rest_g']} 場），"
+                               + (f"有休息的高 {rs['gap']:.0f} 個百分點" if rs["gap"] >= 0.5 else
+                                  f"背靠背反而高 {-rs['gap']:.0f} 個百分點（開季場數少，還看不出累的影響）")
+                               + "；歷屆長期的證據在「冠軍故事 ／ 賽程與休息」。") if rs else None)
+            with st.expander("全部 30 隊：未來 7 天的賽程"):
+                rows_ = []
+                for r in LD.itertuples():
+                    x = GD[GD["abbreviation"] == r.abbreviation]
+                    rows_.append({"球隊": zh(r.abbreviation), "_key": r.abbreviation, "列車": f"第 {rank8.get(r.abbreviation, '–')}",
+                                  "場數": f"{r.games}", "背靠背": f"{r.b2b} 組", "主／客": f"{r.home}／{r.away}",
+                                  "賽程": "・".join(f"{d:%m/%d} {'vs ' if h else '@'}{o}" + ("（背靠背）" if b else "")
+                                                   for d, h, o, b in zip(x["game_date"], x["is_home"], x["opp"], x["b2b"]))})
+                nice_table(pd.DataFrame(rows_), num_cols=("場數",), dot_col="球隊", colors=TEAM_COLORS)
+                st.caption("背靠背＝和前一場只差 1 天（第一場也和最後一場已打完的比賽比）。賽程來自 NBA 官網，每天 15:30 更新。")
+        st.button("歷史證據：背靠背會不會輸比較多？ → 冠軍故事 ／ 賽程與休息", key="train_to_rest",
+                  on_click=goto, args=("賽程與休息",))
 
 # ---------- 焦點人物：本季誰最值得看？（2026-11-23 改版新頁）----------
 if PAGE == "焦點人物":
