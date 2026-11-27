@@ -202,8 +202,9 @@ def player_games(pg, player_id):
     return d[d["min"] > 0].sort_values("game_date")
 
 
-def with_without(pg, tg, p):
-    """有他 vs 沒他的球隊勝率：從他第一次上場之後算，他沒上場的球隊比賽＝缺陣"""
+def with_without(pg, tg, p, min_off=5):
+    """有他 vs 沒他的球隊勝率：從他第一次上場之後算，他沒上場的球隊比賽＝缺陣
+    min_off：至少缺陣幾場才列入（1127-2：由 3 場改成 5 場，3 場的勝率太靠運氣）"""
     if p.empty or tg is None or tg.empty:
         return pd.DataFrame()
     tgr = tg[tg["season_type"] == "Regular Season"] if "season_type" in tg else tg
@@ -217,7 +218,7 @@ def with_without(pg, tg, p):
         team = team[team["game_date"] >= first]
         on = team[team["game_id"].isin(mine)]
         off = team[~team["game_id"].isin(mine)]
-        if len(on) >= 5 and len(off) >= 3:
+        if len(on) >= 5 and len(off) >= min_off:
             w_on, w_off = (on["wl"] == "W").mean(), (off["wl"] == "W").mean()
             rows.append({"player_id": r.player_id, "player_name": r.player_name, "abbreviation": r.abbreviation,
                          "g_on": len(on), "g_off": len(off), "w_on": w_on, "w_off": w_off, "drop": w_on - w_off})
@@ -249,10 +250,11 @@ def hot_players(p, n=5):
 
 
 # ---------------------------------------------------------------------
-# 本季故事：輸球之後（2026-11-24；11/25 依學習日誌重建，因為 11/24 的檔案沒有進 GitHub）
+# 本季故事（2026-11-24 起，每天一則；每一則都對照一頁冠軍故事）
 # ---------------------------------------------------------------------
 def bounce_table(tg):
-    """每隊一列：整季勝率、輸球後下一場勝率、反彈（百分點）、最長連敗、目前連勝／連敗。只看例行賽"""
+    """輸球之後（11/24）：每隊輸球後下一場的勝率、比整季高多少（反彈）、最長連敗、目前連勝／連敗。
+    對照冠軍故事「輸球之後」。只看例行賽。"""
     if tg is None or tg.empty:
         return pd.DataFrame()
     d = tg[tg["season_type"] == "Regular Season"] if "season_type" in tg else tg
@@ -260,70 +262,212 @@ def bounce_table(tg):
     rows = []
     for abbr, x in d.groupby("abbreviation"):
         win = (x["wl"] == "W").astype(int).tolist()
-        after = [w for prev, w in zip(win[:-1], win[1:]) if prev == 0]      # 上一場輸 → 這一場
+        after = [w for prev, w in zip(win[:-1], win[1:]) if prev == 0]   # 上一場輸 → 這一場
         best = cur = 0
-        for w in win:                                                        # 最長連敗
+        for w in win:
             cur = 0 if w else cur + 1
             best = max(best, cur)
         run = 1
-        while run < len(win) and win[-1 - run] == win[-1]:                   # 目前連勝／連敗
+        while run < len(win) and win[-1 - run] == win[-1]:
             run += 1
-        pct = float(np.mean(win)) if win else np.nan
-        aft = float(np.mean(after)) if after else np.nan
-        rows.append({"abbreviation": abbr, "g": len(win), "win": int(sum(win)), "l": len(win) - int(sum(win)),
-                     "win_pct": pct, "aft_g": len(after), "aft_w": int(sum(after)), "aft_pct": aft,
-                     "bounce": (aft - pct) * 100 if after else np.nan, "max_lose": best,
-                     "streak": ("連勝" if win and win[-1] else "連敗") + f" {run}" if win else ""})
-    return pd.DataFrame(rows)
+        rows.append({"abbreviation": abbr, "g": len(win), "win_pct": float(np.mean(win)) if win else np.nan,
+                     "n_after": len(after), "after_loss": float(np.mean(after)) if after else np.nan,
+                     "max_losing": best, "streak": f"{run} 連{'勝' if win and win[-1] else '敗'}" if win else ""})
+    out = pd.DataFrame(rows)
+    out["bounce"] = (out["after_loss"] - out["win_pct"]) * 100      # 百分點
+    return out
 
 
-# ---------------------------------------------------------------------
-# 本季故事：賽程來了——未來 7 天誰最累（2026-11-25）
-# ---------------------------------------------------------------------
-def rest_split(tg):
-    """本季到目前：背靠背第二場（休息 0 天）vs 有休息（1 天以上）的勝率。回傳 dict"""
-    if tg is None or tg.empty:
-        return {}
-    d = tg[tg["season_type"] == "Regular Season"] if "season_type" in tg else tg
-    d = d.dropna(subset=["wl"]).sort_values(["abbreviation", "game_date"]).copy()
-    d["rest"] = d.groupby("abbreviation")["game_date"].diff().dt.days - 1      # 和上一場差幾天，再減 1
-    d = d.dropna(subset=["rest"])
-    d["w"] = (d["wl"] == "W").astype(int)
-    b2b, rested = d[d["rest"] == 0], d[d["rest"] >= 1]
-    if b2b.empty or rested.empty:
-        return {}
-    return {"b2b_g": len(b2b), "b2b_pct": b2b["w"].mean(), "rest_g": len(rested), "rest_pct": rested["w"].mean(),
-            "gap": (rested["w"].mean() - b2b["w"].mean()) * 100}
-
-
-def schedule_load(sched, tg, start, days=7):
-    """未來 days 天（start 之後，不含 start）每隊的賽程負擔。
-    sched＝recap_schedule（一場一列：主隊、客隊）；tg＝recap_team_games（找每隊最後一場已打完的日期）。
-    背靠背＝和前一場只差 1 天；第一場也和「最後一場已打完的比賽」比，所以昨天打、明天又打也算。
-    回傳 (每隊一列的摘要, 每隊每場一列的明細)"""
-    if sched is None or sched.empty:
+def schedule_load(sched, tg, days=7):
+    """賽程來了（11/25）：未來 days 天每隊幾場、幾組背靠背、幾場客場。
+    sched＝recap_schedule（一場一列）；tg 用來找每隊最後一場已打完的日期。對照冠軍故事「賽程與休息」。
+    回傳 (每隊一列, 每隊每場一列)"""
+    if sched is None or sched.empty or tg is None or tg.empty:
         return pd.DataFrame(), pd.DataFrame()
-    start = pd.Timestamp(start).normalize()
-    end = start + pd.Timedelta(days=days)
     s = sched.copy()
     s["game_date"] = pd.to_datetime(s["game_date"])
+    start = pd.to_datetime(tg["game_date"]).max()
+    end = start + pd.Timedelta(days=days)
     s = s[(s["game_date"] > start) & (s["game_date"] <= end)].drop_duplicates("game_id")
     if s.empty:
         return pd.DataFrame(), pd.DataFrame()
     home = pd.DataFrame({"abbreviation": s["home_abbr"], "game_date": s["game_date"], "is_home": True, "opp": s["away_abbr"]})
     away = pd.DataFrame({"abbreviation": s["away_abbr"], "game_date": s["game_date"], "is_home": False, "opp": s["home_abbr"]})
     g = pd.concat([home, away]).dropna(subset=["abbreviation"]).sort_values(["abbreviation", "game_date"])
-    last = tg.groupby("abbreviation")["game_date"].max() if tg is not None and not tg.empty else pd.Series(dtype="datetime64[ns]")
+    last = pd.to_datetime(tg["game_date"]).groupby(tg["abbreviation"]).max()
     g["prev"] = g.groupby("abbreviation")["game_date"].shift(1)
-    g["prev"] = g["prev"].fillna(g["abbreviation"].map(last))                  # 第一場：和最後一場已打完的比
+    g["prev"] = g["prev"].fillna(g["abbreviation"].map(last))
     g["b2b"] = (g["game_date"] - g["prev"]).dt.days == 1
     out = g.groupby("abbreviation").agg(games=("game_date", "size"), b2b=("b2b", "sum"),
-                                         away=("is_home", lambda x: int((~x.astype(bool)).sum()))).reset_index()
-    out["b2b"] = out["b2b"].astype(int)
-    out["home"] = out["games"] - out["away"]
-    # 所有球隊都列出來（未來 7 天沒比賽的也算 0 場）
-    teams = sorted(set(tg["abbreviation"].dropna())) if tg is not None and not tg.empty else []
-    out = pd.DataFrame({"abbreviation": teams}).merge(out, how="left", on="abbreviation") if teams else out
-    out[["games", "b2b", "away", "home"]] = out[["games", "b2b", "away", "home"]].fillna(0).astype(int)
+                                        away=("is_home", lambda x: int((~x.astype(bool)).sum()))).reset_index()
     out = out.sort_values(["b2b", "games", "away"], ascending=False).reset_index(drop=True)
     return out, g.reset_index(drop=True)
+
+
+def b2b_record(tg):
+    """本季到目前：背靠背第二場 vs 有休息（休息 1 天以上）的勝率。回傳 (背靠背勝率, 場數, 有休息勝率, 場數)"""
+    if tg is None or tg.empty:
+        return None
+    d = tg[tg["season_type"] == "Regular Season"] if "season_type" in tg else tg
+    d = d.dropna(subset=["wl"]).sort_values(["abbreviation", "game_date"]).copy()
+    d["rest"] = (d["game_date"] - d.groupby("abbreviation")["game_date"].shift(1)).dt.days - 1
+    b, r = d[d["rest"] == 0], d[d["rest"] >= 1]
+    if len(b) == 0 or len(r) == 0:
+        return None
+    return (b["wl"] == "W").mean(), len(b), (r["wl"] == "W").mean(), len(r)
+
+
+def steady_scorers(pg, p, min_pts=18, min_gp=8):
+    """穩定得分手（11/26）：夠格、場均 min_pts 分以上的主力，每場得分的起伏（標準差 ÷ 場均）與低迷場
+    （不到自己場均六成）。對照冠軍故事「得分穩定度」。只看例行賽。"""
+    if pg is None or pg.empty or p is None or p.empty:
+        return pd.DataFrame()
+    q = p[p["qualified"] & (p["pts_g"] >= min_pts) & (p["gp"] >= min_gp)]
+    if q.empty:
+        return pd.DataFrame()
+    d = _num(pg, ["pts", "min"])
+    d = d[d["season_type"] == "Regular Season"] if "season_type" in d else d
+    d = d[(d["min"] > 0) & d["player_id"].isin(q["player_id"])]
+    g = d.groupby("player_id")["pts"]
+    out = pd.DataFrame({"sd": g.std(ddof=0), "ppg": g.mean(), "gp": g.size(), "lo": g.min(), "hi": g.max()})
+    low = d.merge(out["ppg"], left_on="player_id", right_index=True)
+    out["low_games"] = (low["pts"] < 0.6 * low["ppg"]).groupby(low["player_id"]).sum()
+    out = out.join(q.set_index("player_id")[["player_name", "abbreviation"]]).reset_index()
+    out["cv"] = out["sd"] / out["ppg"]
+    out["rk_cv"] = out["cv"].rank(method="min")
+    return out.sort_values("cv").reset_index(drop=True)
+
+
+def champ_top_scorer_cv(spread, champs, min_gp=40):
+    """歷屆冠軍頭號得分手（例行賽場均最高、出賽 40 場以上）的得分起伏中位數。spread＝player_scoring_spread_mv"""
+    if spread is None or spread.empty or champs is None or champs.empty:
+        return None
+    s = _num(spread, ["gp", "ppg", "sd_pts"])
+    s = s[(s["season_type"] == "Regular Season") & (s["gp"] >= min_gp) & (s["ppg"] > 0)]
+    s = s.merge(champs[["season", "team_id"]], on=["season", "team_id"])
+    if s.empty:
+        return None
+    top = s.sort_values("ppg", ascending=False).drop_duplicates(["season", "team_id"])
+    return {"champ": float((top["sd_pts"] / top["ppg"]).median()), "n": len(top)}
+
+
+def second_stars(pg, p, t=None):
+    """第二主角（11/27）：每隊本季場均得分第 2 名（夠格球員），他的得分佔全隊幾 %、是頭號得分手的幾成。
+    對照冠軍故事「二號與三號得分手」。只看例行賽、夠格球員（出賽至少本季場數 4 成、場均 15 分鐘以上）。
+    t＝team_table 的結果（有的話接上冠軍指數 champ_idx，依列車順序排）。"""
+    if pg is None or pg.empty or p is None or p.empty:
+        return pd.DataFrame()
+    d = _num(pg, ["pts", "min"])
+    d = d[d["season_type"] == "Regular Season"] if "season_type" in d else d
+    team_pts = d.groupby("abbreviation")["pts"].sum()                   # 全隊本季總得分
+    q = p[p["qualified"]].copy()
+    # 季中被交易的球員：player_table 只記最後一隊；他在這隊的得分要用「替這隊打的比賽」算
+    own = d[d["min"] > 0].groupby(["player_id", "abbreviation"])["pts"].sum().rename("pts_team")
+    q = q.merge(own, left_on=["player_id", "abbreviation"], right_index=True, how="left")
+    q["rk_team"] = q.groupby("abbreviation")["pts_g"].rank(ascending=False, method="first")
+    one = q[q["rk_team"] == 1].set_index("abbreviation")
+    two = q[q["rk_team"] == 2].set_index("abbreviation")
+    if two.empty:
+        return pd.DataFrame()
+    out = pd.DataFrame({
+        "abbreviation": two.index,
+        "player_name": two["player_name"].values, "player_id": two["player_id"].values,
+        "ppg": two["pts_g"].values, "gp": two["gp"].values,
+        "share": (two["pts_team"] / two.index.map(team_pts)).values,      # 得分佔全隊比例
+        "star_name": two.index.map(one["player_name"]), "star_ppg": two.index.map(one["pts_g"]),
+    })
+    out["star_share"] = out["abbreviation"].map(one["pts_team"]) / out["abbreviation"].map(team_pts)
+    out["ratio"] = out["ppg"] / out["star_ppg"]                            # 是頭號得分手的幾成
+    out["rk_share"] = out["share"].rank(ascending=False, method="min")     # 30 位二號得分手裡第幾
+    if t is not None and not t.empty and "champ_idx" in t:
+        out = out.merge(t[["abbreviation", "champ_idx", "win", "l"]], on="abbreviation", how="left")
+        out = out.sort_values("champ_idx", ascending=False)
+    return out.reset_index(drop=True)
+
+
+def champ_second_share(sup, champs):
+    """歷屆冠軍的二號得分手：例行賽得分佔全隊比例、場均、是頭號的幾成（中位數）。
+    sup＝support_round_mv（一隊一季一輪一位得分手一列；例行賽數字每一輪都一樣，所以先去重）"""
+    if sup is None or sup.empty or champs is None or champs.empty:
+        return None
+    s = _num(sup, ["scorer_rk", "reg_g", "reg_pts", "team_reg_pts"])
+    s = s.merge(champs[["season", "team_id"]], on=["season", "team_id"])
+    s = s.drop_duplicates(["season", "team_id", "scorer_rk"])
+    s["ppg"] = s["reg_pts"] / s["reg_g"].where(s["reg_g"] > 0)
+    s["share"] = s["reg_pts"] / s["team_reg_pts"].where(s["team_reg_pts"] > 0)
+    one = s[s["scorer_rk"] == 1].set_index(["season", "team_id"])
+    two = s[s["scorer_rk"] == 2].set_index(["season", "team_id"])
+    two = two.join(one[["ppg"]].rename(columns={"ppg": "star_ppg"}), how="inner")
+    if two.empty:
+        return None
+    ratio = two["ppg"] / two["star_ppg"]
+    return {"share": float(two["share"].median()), "ppg": float(two["ppg"].median()),
+            "ratio": float(ratio.median()), "n": len(two),
+            "share_lo": float(two["share"].min()), "share_hi": float(two["share"].max())}
+
+
+def team_scorers(pg, tg, abbr):
+    """球隊關鍵人物（11/27 使用者要求）：一支球隊本季每位球員一列——得分佔全隊幾 %、當過幾場全隊得分王、
+    其中幾場球隊贏球。看這隊是「很多人都能跳出來」還是「一人球隊」。只看例行賽。
+    回傳 (每位球員一列, 球隊摘要 dict)"""
+    if pg is None or pg.empty or tg is None or tg.empty:
+        return pd.DataFrame(), {}
+    d = _num(pg, ["pts", "min"])
+    d = d[(d["abbreviation"] == abbr) & (d["min"] > 0)]
+    d = d[d["season_type"] == "Regular Season"] if "season_type" in d else d
+    if d.empty:
+        return pd.DataFrame(), {}
+    wl = tg[tg["abbreviation"] == abbr].drop_duplicates("game_id").set_index("game_id")["wl"]
+    d = d.assign(win=d["game_id"].map(wl).eq("W"))
+    # 全隊得分王：那一場得分最多的人（同分就都算）
+    d["lead"] = d["pts"] == d.groupby("game_id")["pts"].transform("max")
+    g = d.groupby("player_id")
+    out = pd.DataFrame({"player_name": g["player_name"].last(), "gp": g["game_id"].nunique(),
+                        "pts": g["pts"].sum(), "ppg": g["pts"].mean(),
+                        "lead_g": g["lead"].sum(), "lead_w": d[d["lead"] & d["win"]].groupby("player_id").size()})
+    out["lead_w"] = out["lead_w"].fillna(0)
+    out["share"] = out["pts"] / out["pts"].sum()
+    out = out.sort_values("pts", ascending=False).reset_index()
+    n_games = d["game_id"].nunique()
+    top = out.iloc[0]
+    summary = {
+        "games": n_games, "wins": int(wl.eq("W").sum()),
+        "top_name": top["player_name"], "top_share": float(top["share"]),
+        "eff_n": float(1 / (out["share"] ** 2).sum()),                        # 有效得分人數：等於幾個人平分
+        "n_leaders": int((out["lead_g"] >= 1).sum()),                          # 當過全隊得分王的人數
+        "n_leaders2": int((out["lead_g"] >= 2).sum()),
+        "not_top_lead": float(1 - top["lead_g"] / n_games) if n_games else np.nan,   # 頭號以外的人當得分王的比例
+    }
+    return out, summary
+
+
+def league_scorer_spread(pg):
+    """全聯盟 30 隊的頭號得分佔比、有效得分人數（給「聯盟第幾」用）。只看例行賽"""
+    if pg is None or pg.empty:
+        return pd.DataFrame()
+    d = _num(pg, ["pts", "min"])
+    d = d[d["season_type"] == "Regular Season"] if "season_type" in d else d
+    d = d[d["min"] > 0]
+    pp = d.groupby(["abbreviation", "player_id"])["pts"].sum()
+    sh = pp / pp.groupby(level=0).transform("sum")
+    out = pd.DataFrame({"top_share": sh.groupby(level=0).max(), "eff_n": 1 / (sh ** 2).groupby(level=0).sum()})
+    out["rk_top"] = out["top_share"].rank(ascending=False, method="min")     # 1＝最依賴頭號
+    out["rk_eff"] = out["eff_n"].rank(ascending=False, method="min")         # 1＝得分最分散
+    return out.reset_index()
+
+
+def champ_scorer_spread(player_seasons, champs):
+    """歷屆冠軍（例行賽）的頭號得分佔比、有效得分人數，和冠軍故事「陣容深度」同一個定義。
+    player_seasons＝player_season_stats（一位球員一隊一季一種比賽一列）"""
+    if player_seasons is None or player_seasons.empty or champs is None or champs.empty:
+        return pd.DataFrame()
+    p = _num(player_seasons, ["pts"])
+    p = p[p["season_type"] == "Regular Season"].merge(champs[["season", "team_id"]], on=["season", "team_id"])
+    if p.empty:
+        return pd.DataFrame()
+    tot = p.groupby(["season", "team_id"])["pts"].transform("sum")
+    p = p.assign(share=p["pts"] / tot.where(tot > 0))
+    g = p.sort_values("share", ascending=False).groupby(["season", "team_id"])
+    out = g.agg(abbreviation=("abbreviation", "first"), top_name=("player_name", "first"),
+                top_share=("share", "max"), eff_n=("share", lambda s: 1 / (s ** 2).sum())).reset_index()
+    return out.sort_values("top_share", ascending=False).reset_index(drop=True)
